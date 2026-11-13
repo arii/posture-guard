@@ -11,6 +11,7 @@ synthetic frame source so the dashboard is verifiable with no hardware.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 
 import uvicorn
@@ -27,17 +28,23 @@ from posture_guard.dashboard.app import create_app
 from posture_guard.dashboard.hub import DashboardHub
 from posture_guard.pipeline import PosturePipeline
 
+logger = logging.getLogger(__name__)
+
 
 def build_source(config: AppConfig) -> FrameSource:
-    """RealSense when it starts cleanly, synthetic fallback otherwise."""
+    """RealSense when it starts cleanly, synthetic fallback otherwise.
+
+    Either way the selection is logged exactly once with its reason, so a
+    silent fallback to the synthetic source is impossible.
+    """
     realsense = RealSenseFrameSource(config.camera.width, config.camera.height, config.camera.fps)
     if realsense.start():
+        logger.info("RealSense source active (usb %s)", realsense.status.usb_type or "unknown")
         return CameraWorker(realsense)
-    print(
-        f"no RealSense ({realsense.status.error}); using the synthetic frame source",
-        file=sys.stderr,
-    )
-    return SyntheticFrameSource(config.camera.width, config.camera.height)
+    reason = realsense.status.error or "camera unavailable"
+    logger.info("synthetic source (reason: %s)", reason)
+    print(f"synthetic source (reason: {reason})", file=sys.stderr)
+    return SyntheticFrameSource(config.camera.width, config.camera.height, reason=reason)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -48,6 +55,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     hub = DashboardHub()
 
     audio = AudioWorker(config.audio)

@@ -10,6 +10,7 @@ source *status*, never as exceptions thrown from read().
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Iterator
@@ -37,11 +38,17 @@ class ColorDepth:
 
 @dataclass(frozen=True)
 class SourceStatus:
-    """Operational status of a frame source, safe to render on the dashboard."""
+    """Operational status of a frame source, safe to render on the dashboard.
+
+    kind names the implementation ("realsense" or "synthetic") so the
+    dashboard and logs can always state which source is active — a silent
+    fallback is impossible when the active kind travels with the status.
+    """
 
     connected: bool
     usb_type: str | None = None  # "2.1" | "3.x" | None when unknown
     error: str | None = None
+    kind: str | None = None
 
 
 def usb_bandwidth_warning(usb_type: str | None) -> str | None:
@@ -75,12 +82,15 @@ class SyntheticFrameSource:
     inside the scoring band) so pose workers, dashboards and tests run anywhere.
     """
 
-    def __init__(self, width: int = 640, height: int = 480, depth_m: float = 1.4):
+    def __init__(self, width: int = 640, height: int = 480, depth_m: float = 1.4,
+                 reason: str | None = None):
         self._width = width
         self._height = height
         self._depth_mm = int(depth_m * 1000)
         self._frame_index = 0
-        self._status = SourceStatus(connected=True, usb_type=None, error=None)
+        # reason: why the real camera was not used — surfaced on the dashboard
+        # so a silent synthetic fallback is visible to the user too.
+        self._status = SourceStatus(connected=True, usb_type=None, error=reason, kind="synthetic")
 
     def read(self) -> ColorDepth | None:
         import numpy as np
@@ -125,33 +135,71 @@ class RealSenseFrameSource:
     laptops) can still import this module for the synthetic source and tests.
     """
 
-    def __init__(self, width: int = 640, height: int = 480, fps: int = 30):
+    def __init__(self, width: int = 640, height: int = 480, fps: int = 30, *,
+                 open_attempts: int = 3, open_backoff_s: float = 0.5,
+                 frame_timeout_ms: int = 5000):
         self._width = width
         self._height = height
         self._fps = fps
-        self._status = SourceStatus(connected=False, error="not started")
+        self._open_attempts = open_attempts
+        self._open_backoff_s = open_backoff_s
+        self._frame_timeout_ms = frame_timeout_ms
+        self._status = SourceStatus(connected=False, error="not started", kind="realsense")
         self._pipeline: object | None = None
         self._align: object | None = None
 
     def start(self) -> bool:
-        """Open the pipeline. Missing-camera and USB problems become status
-        states (connected=False, error set) — start() never raises."""
-        try:
-            pipeline, align, usb_type = _open_pipeline(self._width, self._height, self._fps)
-        except Exception as err:  # SDK raises RuntimeError subclass on no device
-            self._status = SourceStatus(connected=False, error=f"camera unavailable: {err}")
-            return False
-        self._pipeline = pipeline
-        self._align = align
-        self._status = SourceStatus(connected=True, usb_type=usb_type, error=None)
-        return True
+        """Open the pipeline with bounded retry and backoff. Missing-camera
+        and USB problems become status states (connected=False, error naming
+        the attempt count and last failure) — start() never raises."""
+        last_error = "unknown error"
+        for attempt in range(1, self._open_attempts + 1):
+            try:
+                pipeline, align, usb_type = _open_pipeline(self._width, self._height, self._fps)
+            except Exception as err:  # SDK raises RuntimeError subclass on no device
+                last_error = str(err)
+                if attempt < self._open_attempts:
+                    time.sleep(self._open_backoff_s)
+                continue
+            self._pipeline = pipeline
+            self._align = align
+            self._status = SourceStatus(
+                connected=True, usb_type=usb_type, error=None, kind="realsense"
+            )
+            return True
+        self._status = SourceStatus(
+            connected=False,
+            kind="realsense",
+            error=(
+                f"camera unavailable after {self._open_attempts} attempts: {last_error}"
+            ),
+        )
+        return False
 
     def read(self) -> ColorDepth | None:
         import numpy as np
 
-        if self._pipeline is None:
+        # Recovery path: an unopened pipeline (failed open or a prior frame
+        # timeout) retries the bounded open instead of stalling.
+        if self._pipeline is None and not self.start():
             return None
-        frames = self._pipeline.wait_for_frames()
+        try:
+            # wait_for_frames without a timeout blocks forever when the device
+            # is present but stops delivering frames — exactly the stall seen
+            # in the field. A bounded wait turns that into a state we recover
+            # from by reopening the pipeline.
+            frames = self._pipeline.wait_for_frames(timeout_ms=self._frame_timeout_ms)
+        except RuntimeError as err:  # SDK raises RuntimeError subclass on timeout
+            self._status = SourceStatus(
+                connected=False,
+                kind="realsense",
+                error=(
+                    f"frame timeout after {self._frame_timeout_ms} ms: {err}"
+                    " - reopening camera"
+                ),
+            )
+            self._close_pipeline()
+            return None
         aligned = self._align.process(frames)
         color_frame = aligned.get_color_frame()
         depth_frame = aligned.get_depth_frame()
@@ -167,15 +215,17 @@ class RealSenseFrameSource:
     def status(self) -> SourceStatus:
         return self._status
 
-    def close(self) -> None:
+    def _close_pipeline(self) -> None:
+        """Stop and forget the pipeline so the next read() reopens it."""
         if self._pipeline is not None:
-            try:
-                self._pipeline.stop()
-            except RuntimeError as err:  # pipeline already stopped
-                self._status = SourceStatus(connected=False, error=str(err))
-                return
-            self._pipeline = None
-            self._status = SourceStatus(connected=False, error=None)
+            with contextlib.suppress(RuntimeError):
+                self._pipeline.stop()  # already stopped is fine; reopen is what matters
+        self._pipeline = None
+        self._align = None
+
+    def close(self) -> None:
+        self._close_pipeline()
+        self._status = SourceStatus(connected=False, error=None, kind="realsense")
 
 
 class CameraWorker:
@@ -227,7 +277,9 @@ class CameraWorker:
     def status(self) -> SourceStatus:
         if self._error is not None:
             base = self._source.status
-            return SourceStatus(connected=False, usb_type=base.usb_type, error=self._error)
+            return SourceStatus(
+                connected=False, usb_type=base.usb_type, error=self._error, kind=base.kind
+            )
         return self._source.status
 
     def close(self) -> None:

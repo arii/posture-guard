@@ -174,6 +174,7 @@ class PosturePipeline:
             camera_connected=camera.connected,
             camera_usb_type=camera.usb_type,
             camera_error=camera.error,
+            camera_source=camera.kind,
             warnings=placement_warnings(result, depth_m, camera, self._config.scoring),
             landmarks=(
                 tracked_landmarks(detection.landmarks)

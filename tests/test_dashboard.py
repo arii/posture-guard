@@ -86,7 +86,12 @@ def test_ws_pushes_metrics_json_schema() -> None:
         "head_tilt_deg",
         "shoulder_level_deg",
     }
-    assert payload["camera"] == {"connected": True, "usb_type": None, "error": None}
+    assert payload["camera"] == {
+        "connected": True,
+        "usb_type": None,
+        "error": None,
+        "source": None,
+    }
     assert payload["audio"]["ready"] is True
     assert payload["warnings"] == ["person too far"]
     assert payload["landmarks"] == [[0.4, 0.6], [0.6, 0.6]]
