@@ -114,7 +114,7 @@ def _open_pipeline(width: int, height: int, fps: int) -> tuple[object, object, s
     profile = pipeline.start(config)
     # Align depth to color so both frames share one pixel grid.
     align = rs.align(rs.stream.color)
-    usb_type = str(profile.get_device().get_info(rs.info.usb_type_descriptor))
+    usb_type = str(profile.get_device().get_info(rs.camera_info.usb_type_descriptor))
     return pipeline, align, usb_type
 
 

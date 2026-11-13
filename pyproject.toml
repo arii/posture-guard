@@ -28,9 +28,12 @@ dev = [
 # The RealSense and MediaPipe imports are lazy (inside camera.py / pose.py).
 hardware = [
     "pyrealsense2>=2.56",
-    # Pinned to the mp.solutions.pose legacy API the pose worker uses;
-    # mediapipe 1.x removed it.
-    "mediapipe>=0.10,<1.0",
+    # Pinned to the mp.solutions.pose legacy API the pose worker uses. That
+    # API was removed from pip packages in 0.10.30+ (google-ai-edge/mediapipe
+    # issues #6192 and #6261, verified 2026-11-13), so the old <1.0 bound
+    # resolved onto the cliff. If a 0.10.2x release still lacks mp.solutions,
+    # tighten to ==0.10.21 (verified working per #6261).
+    "mediapipe>=0.10.14,<0.10.30",
     "opencv-python>=4.8",
 ]
 
