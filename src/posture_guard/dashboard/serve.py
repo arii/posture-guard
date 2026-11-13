@@ -26,6 +26,7 @@ from posture_guard.camera import (
 from posture_guard.config import AppConfig, load_config
 from posture_guard.dashboard.app import create_app
 from posture_guard.dashboard.hub import DashboardHub
+from posture_guard.feedback import RuntimeFeedback
 from posture_guard.pipeline import PosturePipeline
 
 logger = logging.getLogger(__name__)
@@ -61,15 +62,21 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     hub = DashboardHub()
+    feedback = RuntimeFeedback.from_config(config)  # one object shared by pipeline + API
 
     audio = AudioWorker(config.audio)
     audio.start()
 
-    pipeline = PosturePipeline(build_source(config), config, hub=hub, audio=audio)
+    pipeline = PosturePipeline(
+        build_source(config), config, hub=hub, audio=audio, feedback=feedback
+    )
     pipeline.start()
 
     try:
-        uvicorn.run(create_app(hub, audio), host=args.host, port=args.port, log_level="info")
+        uvicorn.run(
+            create_app(hub, audio, feedback=feedback), host=args.host, port=args.port,
+            log_level="info",
+        )
     finally:
         pipeline.close()
         audio.close()

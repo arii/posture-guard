@@ -90,6 +90,9 @@ class AudioWorker:
         self._pending: set[Nudge] = set()
         self._pending_lock = threading.Lock()
         self._sounds: dict[Nudge, Path] = {}
+        self._sounds_lock = threading.Lock()  # guards _sounds swaps vs enqueue reads
+        self._playing_path: Path | None = None  # WAV the playback thread is reading
+        self._voice_seq = 0  # names re-rendered voice WAVs uniquely
         self._sink: str | None = None
         self._tts_backend: str | None = None
         self._error: str | None = None
@@ -126,7 +129,8 @@ class AudioWorker:
     def enqueue(self, nudge: Nudge, *, force: bool = False) -> None:
         """Queue a nudge for playback. Returns immediately; a duplicate of a
         nudge that is queued or currently playing is dropped."""
-        path = self._sounds.get(nudge)
+        with self._sounds_lock:
+            path = self._sounds.get(nudge)
         if path is None:
             return  # nothing rendered for this nudge (e.g. no TTS backend)
         with self._pending_lock:
@@ -137,28 +141,70 @@ class AudioWorker:
 
     def test_nudge(self) -> None:
         """Dashboard hook: force-play chime then voice, bypassing dedupe."""
-        for nudge in (Nudge.CHIME, Nudge.VOICE):
-            self.enqueue(nudge, force=True)
+        self.play_chime()
+        self.play_voice()
+
+    def play_chime(self) -> None:
+        """Dashboard hook: force-play the chime only, bypassing dedupe and mode."""
+        self.enqueue(Nudge.CHIME, force=True)
+
+    def play_voice(self) -> None:
+        """Dashboard hook: force-play the spoken prompt only, bypassing dedupe
+        and mode (spec: test endpoints are hardware-verification commands)."""
+        self.enqueue(Nudge.VOICE, force=True)
 
     # -- internals -------------------------------------------------------------------
+
+    def render_prompt(self, text: str) -> str | None:
+        """Re-render the spoken prompt for edited text (spec §settings API).
+
+        Renders to a fresh file, then swaps it in under the sounds lock: a
+        queued prompt keeps its old path and finishes cleanly, the next enqueue
+        picks up the new wording. Returns the backend used, or None when no TTS
+        backend rendered the prompt (worker error field then names the cause).
+        """
+        with self._sounds_lock:
+            self._voice_seq += 1
+            path = self._sound_dir / f"voice-{self._voice_seq}.wav"
+        backend = self._render_voice(text, path)
+        if backend is None:
+            path.unlink(missing_ok=True)
+            return None
+        self._tts_backend = backend
+        self._error = None  # a successful re-render supersedes a stale backend error
+        with self._sounds_lock:
+            previous = self._sounds.get(Nudge.VOICE)
+            self._sounds[Nudge.VOICE] = path
+        self._discard_stale(previous)
+        return backend
+
+    def _discard_stale(self, path: Path | None) -> None:
+        """Delete a replaced voice WAV once no playback can still be reading it.
+        A file being played right now is unlinked by the playback loop instead."""
+        if path is None or path == self._playing_path:
+            return
+        path.unlink(missing_ok=True)
 
     def _render_sounds(self) -> None:
         self._sound_dir.mkdir(parents=True, exist_ok=True)
         chime_path = self._sound_dir / "chime.wav"
         _render_chime(chime_path)
         self._sounds[Nudge.CHIME] = chime_path
-        self._tts_backend = self._render_voice()
+        voice_path = self._sound_dir / "voice.wav"
+        backend = self._render_voice(self._config.chime_text, voice_path)
+        if backend is not None:
+            self._sounds[Nudge.VOICE] = voice_path
+            self._tts_backend = backend
 
-    def _render_voice(self) -> str | None:
-        """Render the spoken prompt; pico2wave first, espeak-ng fallback."""
-        path = self._sound_dir / "voice.wav"
+    def _render_voice(self, text: str, path: Path) -> str | None:
+        """Render the spoken prompt to path; pico2wave first, espeak-ng fallback.
+        Renders only — callers install the result into _sounds under the lock."""
         for backend in ("pico2wave", "espeak-ng"):
             binary = self._which(backend)
             if binary is None:
                 continue
-            result = self._runner([binary, "-w", str(path), self._config.chime_text])
+            result = self._runner([binary, "-w", str(path), text])
             if result.returncode == 0:
-                self._sounds[Nudge.VOICE] = path
                 return backend
         self._error = "no TTS backend available (install pico2wave or espeak-ng)"
         return None
@@ -183,8 +229,10 @@ class AudioWorker:
                 return
             nudge, path = item
             try:
+                self._playing_path = path
                 self._play(path)
             finally:
+                self._playing_path = None
                 self._queue.task_done()
                 with self._pending_lock:
                     self._pending.discard(nudge)

@@ -1,8 +1,9 @@
 """FastAPI dashboard app (spec §dashboard).
 
-Three surfaces over the shared hub, all clients sharing one upstream buffer:
+Surfaces over the shared hub, all clients sharing one upstream buffer:
 GET /video.mjpg streams annotated JPEGs; WS /ws pushes the metrics JSON and
-drops dead clients; POST /nudge/test fires the audio test prompt.
+drops dead clients; POST /nudge/test, /nudge/chime and /nudge/voice fire test
+prompts; POST /feedback/settings applies runtime feedback settings.
 """
 
 from __future__ import annotations
@@ -13,11 +14,12 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from posture_guard.dashboard.hub import DashboardHub
+from posture_guard.feedback import RuntimeFeedback, validate_changes
 
 MJPEG_BOUNDARY = "frame"
 
@@ -26,12 +28,16 @@ class NudgeSink(Protocol):
     """The audio surface the dashboard needs — AudioWorker satisfies it."""
 
     def test_nudge(self) -> None: ...
+    def play_chime(self) -> None: ...
+    def play_voice(self) -> None: ...
+    def render_prompt(self, text: str) -> str | None: ...
 
 
 def create_app(
     hub: DashboardHub,
     audio: NudgeSink,
     *,
+    feedback: RuntimeFeedback | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> FastAPI:
     """Build the dashboard app.
@@ -96,6 +102,35 @@ def create_app(
     def nudge_test() -> dict[str, str]:
         audio.test_nudge()
         return {"status": "queued"}
+
+    @app.post("/nudge/chime")
+    def nudge_chime() -> dict[str, str]:
+        audio.play_chime()
+        return {"status": "queued"}
+
+    @app.post("/nudge/voice")
+    def nudge_voice() -> dict[str, str]:
+        audio.play_voice()
+        return {"status": "queued"}
+
+    @app.post("/feedback/settings")
+    def feedback_settings(body: dict[str, object]) -> dict[str, object]:
+        """Apply runtime feedback settings (mode, voice timings, prompt text).
+
+        Validation is all-or-nothing: an invalid body applies nothing and
+        returns 422 with the reason. Prompt-text changes re-render the spoken
+        WAV live (audio.render_prompt); no restart anywhere.
+        """
+        if feedback is None:
+            raise HTTPException(status_code=503, detail="feedback settings not wired up")
+        changes, error = validate_changes(body)
+        if error is not None:
+            raise HTTPException(status_code=422, detail=error)
+        text_changed = "chime_text" in changes
+        payload = feedback.apply(**changes)
+        if text_changed:
+            audio.render_prompt(str(changes["chime_text"]))
+        return payload
 
     @app.get("/")
     def index() -> FileResponse:

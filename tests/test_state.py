@@ -17,6 +17,7 @@ import pytest
 
 from conftest import make_pose
 from posture_guard.config import ScoringConfig, StateConfig
+from posture_guard.feedback import RuntimeFeedback
 from posture_guard.scoring import (
     LEFT_EAR,
     RIGHT_EAR,
@@ -62,6 +63,67 @@ def grid(start: float, stop: float, step: float, result) -> list[tuple[float, ob
         out.append((round(now, 3), result))
         now += step
     return out
+
+
+class TestLiveVoiceTimings:
+    """Runtime voice-timing override: edits take effect with no restart
+    (spec acceptance: verified by a state-machine test with a runtime override)."""
+
+    def _machine(self, feedback: RuntimeFeedback) -> PostureStateMachine:
+        return PostureStateMachine(TIMINGS, CFG, timings_override=feedback)
+
+    @staticmethod
+    def _voice_times(samples, transitions):  # noqa: ANN001
+        return [
+            now for (now, _), transition in zip(samples, transitions, strict=False)
+            if transition.nudge is Nudge.VOICE
+        ]
+
+    def test_override_shortens_voice_delay_and_cooldown(self) -> None:
+        feedback = RuntimeFeedback(voice_delay_s=3.0, voice_repeat_cooldown_s=6.0)
+        machine = self._machine(feedback)
+
+        samples = grid(0.0, 12.0, 0.1, _bad_pose_score())
+        transitions = run(machine, samples)
+
+        voice_times = self._voice_times(samples, transitions)
+        # Chime at 2.0 (bad_sustain); voice 3 s later; repeat 6 s after that.
+        assert voice_times[0] == pytest.approx(5.0)
+        assert voice_times[1] == pytest.approx(11.0)
+
+    def test_mid_run_edit_takes_effect_on_the_next_nudge(self) -> None:
+        feedback = RuntimeFeedback()  # default 10 s delay at start
+        machine = self._machine(feedback)
+
+        samples = grid(0.0, 6.0, 0.1, _bad_pose_score())
+        transitions = run(machine, samples)
+        assert self._voice_times(samples, transitions) == []  # no voice before 6 s
+        chime_times = [
+            now for (now, _), transition in zip(samples, transitions, strict=False)
+            if transition.nudge is Nudge.CHIME
+        ]
+        assert chime_times == [pytest.approx(2.0)]
+
+        # Presenter tightens the delay mid-demo; the first sample that now
+        # satisfies the edited delay fires the voice prompt.
+        feedback.apply(voice_delay_s=1.5)
+        samples = grid(6.0, 8.0, 0.1, _bad_pose_score())
+        transitions = run(machine, samples)
+
+        voice_times = self._voice_times(samples, transitions)
+        assert voice_times == [pytest.approx(6.0)]  # 6.0 - chime 2.0 >= edited delay 1.5
+
+    def test_no_override_keeps_config_schedule(self) -> None:
+        machine = PostureStateMachine(TIMINGS, CFG)
+
+        # Bad from t=0: chime at 2.0 (bad_sustain), voice at 12.0 (config
+        # delay 10.0), repeat at 42.0 (config cooldown 30.0).
+        samples = grid(0.0, 43.0, 0.1, _bad_pose_score())
+        transitions = run(machine, samples)
+
+        voice_times = self._voice_times(samples, transitions)
+        assert voice_times[0] == pytest.approx(12.0)
+        assert voice_times[1] == pytest.approx(42.0)
 
 
 class TestNudgeSchedule:

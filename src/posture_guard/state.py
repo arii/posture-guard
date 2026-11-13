@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Protocol
 
 from posture_guard.config import ScoringConfig, StateConfig
 from posture_guard.scoring import (
@@ -43,6 +44,12 @@ class Nudge(Enum):
 _ABSENT_REASONS = (UnreliableReason.NO_POSE, UnreliableReason.DEPTH_OUT_OF_BAND)
 
 
+class VoiceTimings(Protocol):
+    """Runtime voice-timing override — RuntimeFeedback satisfies it."""
+
+    def voice_timings(self) -> tuple[float, float]: ...
+
+
 @dataclass(frozen=True)
 class Transition:
     state: PostureState
@@ -61,9 +68,13 @@ class PostureStateMachine:
     - NO_PERSON after no_person_timeout_s of no pose / out-of-band depth
     """
 
-    def __init__(self, timings: StateConfig, thresholds: ScoringConfig):
+    def __init__(
+        self, timings: StateConfig, thresholds: ScoringConfig, *,
+        timings_override: VoiceTimings | None = None,
+    ):
         self._t = timings
         self._th = thresholds
+        self._override = timings_override
         self._state = PostureState.NO_PERSON
         self._history: list[tuple[float, str]] = []  # (t, zone) samples
         self._bad_since: float | None = None
@@ -136,6 +147,12 @@ class PostureStateMachine:
 
     # -- scored paths ----------------------------------------------------------------
 
+    def _voice_timings(self) -> tuple[float, float]:
+        """Live voice timings: the runtime override when present, else config."""
+        if self._override is not None:
+            return self._override.voice_timings()
+        return self._t.voice_delay_s, self._t.voice_repeat_cooldown_s
+
     def _update_idle(self, smoothed_bad: bool, smoothed_good: bool, now: float) -> Transition:
         # Bad is checked first so a slouching person who never sat well still
         # gets nudged instead of waiting forever in NO_PERSON.
@@ -169,15 +186,16 @@ class PostureStateMachine:
             self._chime_at = None
             self._voice_at = None
             return Transition(PostureState.GOOD, Nudge.NONE)
+        delay_s, repeat_s = self._voice_timings()
         if self._state is PostureState.BAD_CHIME and self._chime_at is not None:
-            if now - self._chime_at >= self._t.voice_delay_s - _EPS:
+            if now - self._chime_at >= delay_s - _EPS:
                 self._state = PostureState.BAD_VOICE
                 self._voice_at = now
                 return Transition(PostureState.BAD_VOICE, Nudge.VOICE)
         elif (
             self._state is PostureState.BAD_VOICE
             and self._voice_at is not None
-            and now - self._voice_at >= self._t.voice_repeat_cooldown_s - _EPS
+            and now - self._voice_at >= repeat_s - _EPS
         ):
             self._voice_at = now
             return Transition(PostureState.BAD_VOICE, Nudge.VOICE)

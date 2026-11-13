@@ -13,16 +13,30 @@ from fastapi.testclient import TestClient
 
 from posture_guard.dashboard.app import create_app
 from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot, ScoringThresholds
+from posture_guard.feedback import FeedbackMode, RuntimeFeedback
 
 
 class RecordingAudio:
-    """NudgeSink double that counts test-nudge calls."""
+    """NudgeSink double that counts test-nudge calls and re-renders."""
 
     def __init__(self) -> None:
         self.calls = 0
+        self.chime_calls = 0
+        self.voice_calls = 0
+        self.rendered: list[str] = []
 
     def test_nudge(self) -> None:
         self.calls += 1
+
+    def play_chime(self) -> None:
+        self.chime_calls += 1
+
+    def play_voice(self) -> None:
+        self.voice_calls += 1
+
+    def render_prompt(self, text: str) -> str | None:
+        self.rendered.append(text)
+        return "pico2wave"
 
 
 def make_snapshot(**overrides: object) -> MetricsSnapshot:
@@ -60,6 +74,59 @@ def test_nudge_endpoint_enqueues_test_prompt() -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
     assert audio.calls == 1
+
+
+def test_separate_chime_and_voice_endpoints() -> None:
+    """Each channel fires independently; mode/silence cannot block them
+    (spec: test endpoints are hardware-verification commands)."""
+    hub, audio = DashboardHub(), RecordingAudio()
+    client = TestClient(create_app(hub, audio, feedback=RuntimeFeedback(mode=FeedbackMode.SILENT)))
+
+    assert client.post("/nudge/chime").json() == {"status": "queued"}
+    assert client.post("/nudge/voice").json() == {"status": "queued"}
+
+    assert audio.chime_calls == 1
+    assert audio.voice_calls == 1
+    assert audio.calls == 0  # combined test endpoint untouched
+
+
+def test_feedback_settings_apply_at_runtime() -> None:
+    hub, audio = DashboardHub(), RecordingAudio()
+    feedback = RuntimeFeedback()
+    client = TestClient(create_app(hub, audio, feedback=feedback))
+
+    response = client.post(
+        "/feedback/settings",
+        json={"mode": "chime_only", "voice_delay_s": 4.0,
+              "voice_repeat_cooldown_s": 12.0, "chime_text": "  sit up  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "chime_only"
+    assert feedback.voice_timings() == (4.0, 12.0)
+    assert feedback.prompt_text() == "sit up"
+    assert audio.rendered == ["sit up"]  # prompt re-rendered live, no restart
+
+
+def test_feedback_settings_reject_invalid_body_without_partial_apply() -> None:
+    hub, audio = DashboardHub(), RecordingAudio()
+    feedback = RuntimeFeedback()
+    client = TestClient(create_app(hub, audio, feedback=feedback))
+
+    response = client.post("/feedback/settings", json={"mode": "vibrate"})
+
+    assert response.status_code == 422
+    assert "vibrate" in response.json()["detail"]
+    assert feedback.mode is FeedbackMode.CHIME_AND_VOICE  # nothing applied
+    assert audio.rendered == []
+
+
+def test_feedback_settings_require_wired_feedback() -> None:
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.post("/feedback/settings", json={"mode": "silent"})
+
+    assert response.status_code == 503
 
 
 def test_mjpeg_streams_annotated_frames_from_shared_buffer() -> None:
@@ -113,6 +180,27 @@ def test_ws_pushes_metrics_json_schema() -> None:
     assert payload["audio"]["ready"] is True
     assert payload["warnings"] == ["person too far"]
     assert payload["landmarks"] == [[0.4, 0.6], [0.6, 0.6]]
+    assert payload["nudge_event"] is None
+
+
+def test_ws_payload_carries_feedback_settings_and_nudge_event() -> None:
+    """Settings ride the snapshot like thresholds; a nudge event is keyed by
+    sequence so the UI can re-trigger the banner on repeated nudges."""
+    hub = DashboardHub()
+    event = {"kind": "chime", "seq": 3, "muted": False}
+    hub.publish_metrics(
+        make_snapshot(
+            feedback={"mode": "chime_only", "session_only": True},
+            nudge_event=event,
+        )
+    )
+    client = TestClient(create_app(hub, RecordingAudio()))
+
+    with client.websocket_connect("/ws") as ws:
+        payload = ws.receive_json()
+
+    assert payload["feedback"] == {"mode": "chime_only", "session_only": True}
+    assert payload["nudge_event"] == event
 
 
 def test_ws_pushes_each_new_snapshot() -> None:
@@ -185,9 +273,31 @@ def test_index_page_is_served() -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     # The page is plain DOM driven by the WS payload: overlay canvas, metric
-    # tiles, state badge and the test-nudge button.
-    for fragment in ("<canvas", "/ws", "/video.mjpg", "/nudge/test", "badge"):
+    # tiles, state badge, the test-nudge button and the feedback controls.
+    for fragment in (
+        "<canvas", "/ws", "/video.mjpg", "/nudge/test", "badge",
+        "/nudge/chime", "/nudge/voice", "/feedback/settings",
+    ):
         assert fragment in response.text
+
+
+def test_index_has_feedback_controls_and_visual_event_targets() -> None:
+    """Mode selector, per-channel buttons, settings form with the session-only
+    marker, and the synchronized nudge-event banner targets (spec §UI)."""
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert 'name="feedback-mode"' in page
+    for mode in ("chime_and_voice", "chime_only", "silent"):
+        assert f'value="{mode}"' in page
+    for element_id in ("play-chime", "play-voice", "apply-settings", "set-chime_text",
+                       "set-voice_delay_s", "set-voice_repeat_cooldown_s",
+                       "nudge-event", "feedback-error"):
+        assert f'id="{element_id}"' in page
+    assert "session-only" in page  # UI states when a setting is not persisted
 
 
 def test_index_has_band_labels_and_unreliable_detail_targets() -> None:
