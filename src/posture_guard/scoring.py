@@ -51,6 +51,37 @@ class UnreliableReason(Enum):
     DEPTH_OUT_OF_BAND = "depth_out_of_band"
 
 
+# Tracked landmark groups for human-readable reliability detail: name and the
+# (left, right) landmark pair.
+_TRACKED_GROUPS: tuple[tuple[str, tuple[int, int]], ...] = (
+    ("ears", (LEFT_EAR, RIGHT_EAR)),
+    ("shoulders", (LEFT_SHOULDER, RIGHT_SHOULDER)),
+    ("hips", (LEFT_HIP, RIGHT_HIP)),
+)
+_SIDES = ("left", "right")
+
+
+def low_visibility_detail(landmarks: Sequence[Landmark], cfg: ScoringConfig) -> str:
+    """Human-readable LOW_VISIBILITY reason: which tracked landmarks are below
+    the visibility floor and by how much, e.g.
+    'hips not visible (left 0.31, right 0.28) - trunk lean unavailable'."""
+    parts: list[str] = []
+    hips_hidden = False
+    for name, (left, right) in _TRACKED_GROUPS:
+        below = [
+            f"{side} {landmarks[index].visibility:.2f}"
+            for side, index in zip(_SIDES, (left, right), strict=True)
+            if landmarks[index].visibility < cfg.visibility_floor
+        ]
+        if below:
+            parts.append(f"{name} not visible ({', '.join(below)})")
+            hips_hidden = hips_hidden or name == "hips"
+    if not parts:
+        return "landmark visibility below the floor"
+    detail = "; ".join(parts)
+    return detail + " - trunk lean unavailable" if hips_hidden else detail
+
+
 @dataclass(frozen=True)
 class ScoredPosture:
     """Metrics for one frame. Sign conventions are symmetric: the state
@@ -161,7 +192,9 @@ def score_pose(
             f"depth {depth_m:.2f} m outside {cfg.depth_min_m}-{cfg.depth_max_m} m",
         )
     if not visibility_ok(landmarks, cfg):
-        return Unreliable(UnreliableReason.LOW_VISIBILITY)
+        return Unreliable(
+            UnreliableReason.LOW_VISIBILITY, low_visibility_detail(landmarks, cfg)
+        )
     return ScoredPosture(
         head_forward_deg=measure_head_forward(landmarks),
         trunk_lean_deg=measure_trunk_lean(landmarks),
