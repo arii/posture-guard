@@ -16,7 +16,13 @@ from __future__ import annotations
 import pytest
 
 from conftest import make_pose
-from posture_guard.config import FeedbackConfig, PositiveChimeConfig, ScoringConfig, StateConfig
+from posture_guard.config import (
+    BaselineDeviationConfig,
+    FeedbackConfig,
+    PositiveChimeConfig,
+    ScoringConfig,
+    StateConfig,
+)
 from posture_guard.feedback import RuntimeFeedback
 from posture_guard.scoring import (
     LEFT_EAR,
@@ -329,3 +335,80 @@ class TestUnreliableAndAbsent:
         transitions = run(sm, grid(8.1, 12.0, 0.1, GOOD))
         assert transitions[-1].state is PostureState.GOOD
         assert all(tr.nudge is not Nudge.CHIME for tr in transitions)
+
+
+def _scored(head_forward: float, trunk: float = 0.0) -> ScoredPosture:
+    """Synthetic score with control over the head-forward angle only."""
+    return ScoredPosture(
+        head_forward_deg=head_forward,
+        trunk_lean_deg=trunk,
+        head_tilt_deg=0.0,
+        shoulder_level_deg=0.0,
+        depth_m=1.4,
+    )
+
+
+class TestBaselineDeviation:
+    """scoring.baseline_deviation: a slow EMA baseline of each angle catches
+    whole-torso slouch that keeps head-vs-shoulder angles small. These tests
+    exercise the check end-to-end through the state machine."""
+
+    def test_sustained_drift_breaches_while_raw_angles_stay_good(self):
+        """Neutral calibrated at -2 deg (inside the 8 deg band); the person then
+        drifts to +7 deg. Raw angles never breach, but the 9 deg deviation from
+        their own recent neutral does — chime after bad_sustain_s."""
+        machine = PostureStateMachine(TIMINGS, CFG)
+        run(machine, grid(0.0, 30.0, 0.1, _scored(-2.0)))
+        assert machine.state is PostureState.GOOD
+
+        samples = grid(30.0, 34.0, 0.1, _scored(7.0))
+        transitions = run(machine, samples)
+        chimes = [t for t in transitions if t.nudge is Nudge.CHIME]
+        assert len(chimes) == 1  # deviation zone feeds the same smoothing+sustain
+        assert chimes[0].state is PostureState.BAD_CHIME
+        assert chimes[0].seconds_bad is not None
+        assert chimes[0].seconds_bad == pytest.approx(2.0, abs=0.1)
+
+    def test_fast_transient_noise_does_not_nudge(self):
+        """A 0.2 s deviation excursion (under the 0.3 s smoothing window) never
+        confirms a bad streak, and the EMA baseline shrugs it off."""
+        machine = PostureStateMachine(TIMINGS, CFG)
+        run(machine, grid(0.0, 30.0, 0.1, _scored(-2.0)))
+        assert machine.state is PostureState.GOOD
+
+        samples = (
+            grid(30.0, 30.1, 0.1, _scored(7.0))  # 0.2 s excursion
+            + grid(30.2, 34.0, 0.1, _scored(-2.0))
+        )
+        transitions = run(machine, samples)
+        assert all(t.nudge is Nudge.NONE for t in transitions)
+        assert machine.state is PostureState.GOOD
+
+    def test_feature_off_restores_current_behavior(self):
+        """baseline_deviation.enabled=false: the machine never sees a deviation
+        zone — the exact same drift timeline that chimes above stays GOOD."""
+        cfg = ScoringConfig(
+            baseline_deviation=BaselineDeviationConfig(enabled=False)
+        )
+        machine = PostureStateMachine(TIMINGS, cfg)
+        run(machine, grid(0.0, 30.0, 0.1, _scored(-2.0)))
+        assert machine.state is PostureState.GOOD
+
+        transitions = run(machine, grid(30.0, 34.0, 0.1, _scored(7.0)))
+        assert all(t.nudge is Nudge.NONE for t in transitions)
+        assert machine.state is PostureState.GOOD
+
+    def test_no_person_recalibrates_baseline(self):
+        """NO_PERSON resets the baseline so a new sitting context (or person)
+        calibrates from its own first scored frame, not the old neutral."""
+        machine = PostureStateMachine(TIMINGS, CFG)
+        run(machine, grid(0.0, 30.0, 0.1, _scored(-2.0)))
+        # Leave the depth band long enough to enter NO_PERSON.
+        run(machine, grid(30.0, 32.5, 0.1, TOO_FAR))
+        assert machine.state is PostureState.NO_PERSON
+
+        # A different neutral at +7 deg from the first scored frame: with the
+        # fresh baseline anchored there, no deviation breach is possible.
+        transitions = run(machine, grid(32.5, 36.0, 0.1, _scored(7.0)))
+        assert all(t.nudge is Nudge.NONE for t in transitions)
+        assert machine.state is PostureState.GOOD

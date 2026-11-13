@@ -9,11 +9,19 @@ scoring:
   # A metric is "bad" when its absolute value passes the threshold.
   # Hysteresis: it only counts as "good" again once it falls back below
   # (threshold - hysteresis_margin_deg).
-  head_forward_deg: 12.0
-  trunk_lean_deg: 10.0
-  head_tilt_deg: 12.0
-  shoulder_level_deg: 6.0
+  head_forward_deg: 8.0
+  trunk_lean_deg: 7.0
+  head_tilt_deg: 8.0
+  shoulder_level_deg: 4.0
   hysteresis_margin_deg: 3.0
+  # Slow-baseline deviation check: an EMA of each angle over ~5 min tracks the
+  # user's own recent neutral, so whole-torso slouch (head and shoulders drift
+  # back together, keeping head-vs-shoulder angles small) still breaches as
+  # deviation from that neutral. Deviation thresholds reuse the per-metric
+  # bands above with the same hysteresis.
+  baseline_deviation:
+    enabled: true
+    window_s: 300.0
   # MediaPipe landmark visibility must clear this floor for a score to be trusted.
   visibility_floor: 0.5
   # High-mount framing (camera well above head height) can keep hips out of

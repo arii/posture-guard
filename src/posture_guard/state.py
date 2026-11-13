@@ -18,9 +18,12 @@ from typing import Protocol
 
 from posture_guard.config import FeedbackConfig, ScoringConfig, StateConfig
 from posture_guard.scoring import (
+    PostureBaseline,
+    ScoredPosture,
     ScoringResult,
     Unreliable,
     UnreliableReason,
+    deviation_zone,
     zone_of,
 )
 
@@ -79,6 +82,13 @@ class PostureStateMachine:
         self._override = timings_override
         self._positive = positive_chime if positive_chime is not None else FeedbackConfig()
         self._state = PostureState.NO_PERSON
+        # Slow-baseline deviation check (scoring.baseline_deviation): catches
+        # whole-torso slouch that keeps head-vs-shoulder angles small.
+        self._baseline = (
+            PostureBaseline(thresholds.baseline_deviation)
+            if thresholds.baseline_deviation.enabled
+            else None
+        )
         self._history: list[tuple[float, str]] = []  # (t, zone) samples
         self._bad_since: float | None = None
         self._good_since: float | None = None
@@ -98,6 +108,18 @@ class PostureStateMachine:
 
         self._absent_since = None  # person seen and scored
         zone = zone_of(result, self._th)
+        if isinstance(result, ScoredPosture) and self._baseline is not None:
+            # The baseline is a passive reference, not a gate: it samples every
+            # scored frame. The deviation check only widens detection — it never
+            # overrides a raw-angle breach.
+            self._baseline.update(result, now)
+            base_zone = deviation_zone(result, self._baseline, self._th)
+            if base_zone == "bad":
+                zone = "bad"
+            elif zone == "good" and base_zone == "good":
+                zone = "good"
+            else:
+                zone = "neutral"
         self._history.append((now, zone))
         self._prune_history(now)
 
@@ -149,6 +171,12 @@ class PostureStateMachine:
     def _enter_no_person(self) -> None:
         self._state = PostureState.NO_PERSON
         self._history.clear()
+        if self._baseline is not None:
+            # A sustained absence likely means a new sitting context (or a new
+            # person); re-calibrate from the next scored frame. Momentary
+            # UNRELIABLE frames deliberately do NOT reset it — one visibility
+            # glitch must not erase minutes of calibration.
+            self._baseline.reset()
         self._bad_since = None
         self._good_since = None
         self._chime_at = None

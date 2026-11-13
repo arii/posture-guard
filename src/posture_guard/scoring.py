@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from posture_guard.config import ScoringConfig
+from posture_guard.config import BaselineDeviationConfig, ScoringConfig
 
 # MediaPipe Pose landmark indices.
 LEFT_EAR = 7
@@ -222,21 +222,101 @@ def score_pose(
     )
 
 
+def _metric_threshold_pairs(
+    metrics: ScoredPosture, cfg: ScoringConfig
+) -> list[tuple[float, float]]:
+    """(value, enter threshold) pairs the BAD decision checks. Trunk lean drops
+    out when it is optional so a garbage trunk angle cannot decide the zone."""
+    pairs = [
+        (metrics.head_forward_deg, cfg.head_forward_deg),
+        (metrics.head_tilt_deg, cfg.head_tilt_deg),
+        (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
+    ]
+    if cfg.trunk_lean_required:
+        pairs.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
+    return pairs
+
+
 def zone_of(metrics: ScoredPosture, cfg: ScoringConfig) -> str:
     """Classify a score against thresholds with hysteresis.
 
     Returns "bad" when any metric passes its enter threshold, "good" when all
     metrics are below their exit thresholds, "neutral" in the hysteresis band
     between them."""
-    enter = [
-        (metrics.head_forward_deg, cfg.head_forward_deg),
-        (metrics.head_tilt_deg, cfg.head_tilt_deg),
-        (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
+    pairs = _metric_threshold_pairs(metrics, cfg)
+    if any(abs(value) > threshold for value, threshold in pairs):
+        return "bad"
+    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in pairs):
+        return "good"
+    return "neutral"
+
+
+class PostureBaseline:
+    """Exponential moving average of each scored angle over ~window_s.
+
+    Tracks the user's own recent neutral so a whole-torso slouch — head and
+    shoulders drifting back together, keeping head-vs-shoulder angles small —
+    still breaches as deviation from the person's neutral. Alpha is dt/window_s
+    (capped at 1), so a 30 fps stream moves the baseline ~0.1% per frame: fast
+    transients leave it untouched while a sustained drift becomes the new
+    reference over several minutes. Fed only scored frames (Unreliable results
+    carry no metrics); resetting re-anchors to the next update.
+    """
+
+    def __init__(self, cfg: BaselineDeviationConfig) -> None:
+        self._window_s = cfg.window_s
+        self._metrics: ScoredPosture | None = None
+        self._last_t: float | None = None
+
+    @property
+    def metrics(self) -> ScoredPosture | None:
+        """Current baseline, or None before the first update."""
+        return self._metrics
+
+    def update(self, metrics: ScoredPosture, now: float) -> None:
+        if self._metrics is None or self._last_t is None:
+            self._metrics = metrics
+            self._last_t = now
+            return
+        alpha = min(1.0, max(0.0, (now - self._last_t) / self._window_s))
+        self._metrics = ScoredPosture(
+            head_forward_deg=self._metrics.head_forward_deg
+            + alpha * (metrics.head_forward_deg - self._metrics.head_forward_deg),
+            trunk_lean_deg=self._metrics.trunk_lean_deg
+            + alpha * (metrics.trunk_lean_deg - self._metrics.trunk_lean_deg),
+            head_tilt_deg=self._metrics.head_tilt_deg
+            + alpha * (metrics.head_tilt_deg - self._metrics.head_tilt_deg),
+            shoulder_level_deg=self._metrics.shoulder_level_deg
+            + alpha * (metrics.shoulder_level_deg - self._metrics.shoulder_level_deg),
+            depth_m=self._metrics.depth_m
+            + alpha * (metrics.depth_m - self._metrics.depth_m),
+        )
+        self._last_t = now
+
+    def reset(self) -> None:
+        self._metrics = None
+        self._last_t = None
+
+
+def deviation_zone(
+    metrics: ScoredPosture, baseline: PostureBaseline, cfg: ScoringConfig
+) -> str:
+    """Classify deviation from the slow baseline, reusing the per-metric bands
+    and the same hysteresis as zone_of. Before any baseline exists there is no
+    reference to deviate from, so the frame reads "good" (zone_of still decides
+    the zone on absolute angles)."""
+    ref = baseline.metrics
+    if ref is None:
+        return "good"
+    pairs = [
+        (metrics.head_forward_deg - ref.head_forward_deg, cfg.head_forward_deg),
+        (metrics.head_tilt_deg - ref.head_tilt_deg, cfg.head_tilt_deg),
+        (metrics.shoulder_level_deg - ref.shoulder_level_deg, cfg.shoulder_level_deg),
     ]
     if cfg.trunk_lean_required:
-        enter.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
-    if any(abs(value) > threshold for value, threshold in enter):
+        pairs.append((metrics.trunk_lean_deg - ref.trunk_lean_deg, cfg.trunk_lean_deg))
+    if any(abs(value) > threshold for value, threshold in pairs):
         return "bad"
-    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in enter):
+    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in pairs):
         return "good"
     return "neutral"
