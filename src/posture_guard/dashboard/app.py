@@ -46,7 +46,10 @@ def create_app(
     tests (the TestClient close does not propagate a disconnect to a sync
     generator) and available for clean shutdown.
     """
-    app = FastAPI(title="Posture Guard")
+    # /docs is this app's own How-it-works page, so FastAPI's built-in
+    # Swagger UI route (registered ahead of ours) is turned off; the
+    # OpenAPI schema at /openapi.json stays available.
+    app = FastAPI(title="Posture Guard", docs_url=None)
 
     @app.get("/video.mjpg")
     def video_mjpg() -> StreamingResponse:
@@ -149,6 +152,10 @@ def create_app(
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(Path(__file__).parent / "static" / "index.html")
+
+    @app.get("/docs")
+    def docs() -> FileResponse:
+        return FileResponse(Path(__file__).parent / "static" / "docs.html")
 
     return app
 

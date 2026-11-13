@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works — Posture Guard</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1d222a; --line: #2c333e; --text: #e8ebf0;
+    --muted: #8b95a3; --good: #4cc36a; --warn: #ffb340;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 20px 64px; }
+  h1 { font-size: 20px; margin: 18px 0 4px; }
+  h2 { font-size: 16px; margin: 32px 0 8px; color: var(--warn); letter-spacing: 0.04em; }
+  p, li { color: var(--text); }
+  .muted { color: var(--muted); }
+  .back { display: inline-block; margin-top: 20px; color: var(--muted); }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .pipeline { list-style: none; padding: 0; margin: 12px 0; }
+  .pipeline li { border-left: 3px solid var(--good); padding: 6px 0 6px 12px; margin: 8px 0; }
+  .pipeline b { display: block; }
+  .pipeline .on-screen { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>How it works</h1>
+  <p class="muted">Posture Guard &mdash; the five-minute tour. Written for the demo, so you can answer every question on this page without leaving the app.</p>
+
+  <h2>1. The pipeline, end to end</h2>
+  <ol class="pipeline">
+    <li><b>Camera: Intel RealSense D400-series depth + RGB</b>
+      A worker thread pulls frames continuously into a latest-frame buffer (so the dashboard always shows the newest image, never a stale queue), with bounded startup retries and stalled-stream recovery. The depth stream doubles as a distance gate: you are only scored inside 0.6&ndash;2.5&nbsp;m of the camera.
+      <span class="on-screen">This is the live video panel &mdash; the color image with the pose skeleton drawn over it.</span></li>
+    <li><b>Pose landmarks: MediaPipe Pose</b>
+      Each color frame goes through MediaPipe's Pose model, fully on this machine's CPU. It returns 33 2D landmarks with per-landmark visibility scores.
+      <span class="on-screen">The skeleton overlay on the video.</span></li>
+    <li><b>Four posture metrics</b>
+      From those landmarks we compute head forward (ear ahead of shoulder), trunk lean (shoulder-to-hip line from vertical), head tilt, and shoulder level &mdash; all angles, so they work for any body at any distance in the band. A metric is &ldquo;bad&rdquo; when it crosses its threshold; hysteresis (3&deg;) stops it flickering at the boundary, and landmark visibility must clear 0.5 before a reading is trusted. Thresholds: head forward &plusmn;12&deg;, trunk lean &plusmn;10&deg;, head tilt &plusmn;12&deg;, shoulder level &plusmn;6&deg;.
+      <span class="on-screen">The four metric cards, each with its own target band.</span></li>
+    <li><b>State machine</b>
+      Readings are smoothed over 0.3&nbsp;s, then a small state machine decides: bad posture must hold for 2&nbsp;s before a chime fires; a spoken prompt follows 10&nbsp;s later if posture is still bad, repeating at most every 30&nbsp;s; sitting well for a moment returns you to GOOD.
+      <span class="on-screen">The status pill in the header &mdash; it flashes amber when a reminder fires.</span></li>
+    <li><b>Audio worker</b>
+      A queue-backed playback thread plays a short synthesized chime, then a spoken prompt rendered on the fly with pico2wave (espeak-ng as fallback) &mdash; one Linux <code>paplay</code> call per sound, on the USB audio sink it discovers.
+      <span class="on-screen">What you hear: chime, then voice. The dashboard's Test / Play / Speak buttons fire each stage by hand.</span></li>
+    <li><b>Local dashboard</b>
+      A FastAPI server on your own machine streams the annotated video (MJPEG), pushes metrics over a WebSocket, and serves this page. Everything the UI shows &mdash; thresholds, status, audio health &mdash; is computed by the app and sent from it; nothing is hardcoded in the page.
+      <span class="on-screen">The whole dashboard you are looking at.</span></li>
+  </ol>
+
+  <h2>2. The model</h2>
+  <p>Posture Guard uses <b>MediaPipe Pose</b>, the legacy Solutions API, pinned to <code>&gt;=0.10.14,&lt;0.10.30</code> because the Solutions interface was removed from later pip releases. It runs <b>fully in-process, on CPU</b> &mdash; no GPU, no server, no model download at runtime. It gives us 33 2D body landmarks plus a visibility estimate per landmark.</p>
+  <p>Everything on top of the model is ours: the angle geometry, the thresholds, hysteresis, smoothing, the state machine, and the audio flow are plain Python you can read in this repo (<code>scoring.py</code>, <code>state.py</code>, <code>audio.py</code>). The model finds a body; the posture judgment is code we wrote. We plan to migrate to MediaPipe's newer Tasks <i>PoseLandmarker</i> API when we need features the legacy API can't give us &mdash; the pin above keeps the current build honest until then.</p>
+
+  <h2>3. Privacy: what is recorded</h2>
+  <p><b>Nothing is recorded, nothing leaves the machine.</b> We verified this in the code before writing this page:</p>
+  <ul>
+    <li><b>No video or metrics are ever written to disk.</b> Frames are analyzed in memory and dropped. The only files the app creates are synthesized audio WAVs (the chime and the spoken prompt) in a temporary directory that the OS clears on reboot &mdash; no camera frames, no landmark data, no metrics.</li>
+    <li><b>No network calls to anything but your own browser.</b> The codebase makes no outbound HTTP requests of any kind. The only network surface is the dashboard itself, and it binds to <code>127.0.0.1</code> (localhost) by default &mdash; not reachable from other machines.</li>
+    <li><b>No cloud, no third-party services.</b> The pose model runs locally on CPU; the speech is rendered locally too. Unplug the network and everything keeps working.</li>
+  </ul>
+  <p>You can also run it without a camera: a synthetic frame source keeps the dashboard alive with a live status line explaining why.</p>
+
+  <h2>4. Where it came from</h2>
+  <p>I built this end to end in a single day at the Obvious hackathon in San Francisco, November 13, 2026 &mdash; you're reading the write-up on the same day it shipped. The setup is the one real-world arrangement I sit at every day: a RealSense D435i on a shelf above my monitor, pointed down at my torso. Every part &mdash; camera thread, scoring, the reminder state machine, the audio queue, this dashboard &mdash; was written for this hackathon, driven by one goal: reminders that are calm, explainable, and quick to arrive when you slouch and quicker to stop when you don't.</p>
+
+  <h2>5. Roadmap: embedded Linux</h2>
+  <p>The long-term goal is to run Posture Guard on small embedded Linux hardware (a Pi-class board beside the desk) rather than a full desktop. This is intent, not something we've tested on target hardware yet. What already helps: the whole stack is CPU-only with no GPU dependency, the footprint is a handful of lightweight Python processes, and the system degrades gracefully (trusted metrics only, honest UNRELIABLE status) instead of failing hard. What needs work: packaging for a minimal OS image, headless operation without a desktop audio session, and a compute assessment to confirm the pose model's frame rate fits the board's budget.</p>
+
+  <a class="back" href="/">&larr; Back to the dashboard</a>
+</main>
+</body>
+</html>
