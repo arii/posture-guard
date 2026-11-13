@@ -1,0 +1,35 @@
+# Posture Guard configuration. All durations in seconds, all angles in degrees.
+
+camera:
+  width: 640
+  height: 480
+  fps: 30
+
+scoring:
+  # A metric is "bad" when its absolute value passes the threshold.
+  # Hysteresis: it only counts as "good" again once it falls back below
+  # (threshold - hysteresis_margin_deg).
+  head_forward_deg: 12.0
+  trunk_lean_deg: 10.0
+  head_tilt_deg: 12.0
+  shoulder_level_deg: 6.0
+  hysteresis_margin_deg: 3.0
+  # MediaPipe landmark visibility must clear this floor for a score to be trusted.
+  visibility_floor: 0.5
+  # Depth gate: person must sit inside this band (meters) to be scored.
+  depth_min_m: 0.6
+  depth_max_m: 2.5
+
+state:
+  smoothing_window_s: 0.3     # temporal smoothing over the last 0.3 s of samples
+  bad_sustain_s: 2.0          # chime after bad posture is confirmed this long
+  good_confirm_s: 1.0         # in thresholds this long -> state GOOD
+  recovery_good_s: 3.0        # good this long after a chime -> back to GOOD
+  voice_delay_s: 10.0         # spoken prompt this long after the chime
+  voice_repeat_cooldown_s: 30.0  # minimum spacing between spoken prompts
+  no_person_timeout_s: 2.0    # no pose / out of depth band this long -> NO_PERSON
+
+audio:
+  # PulseAudio/PipeWire sink name; null = first USB audio sink.
+  sink: null
+  chime_text: "fix your posture"
