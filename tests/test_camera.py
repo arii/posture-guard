@@ -253,6 +253,7 @@ def test_frame_timeout_sets_readable_error_and_reopens(monkeypatch):
 
     monkeypatch.setattr("posture_guard.camera._open_pipeline", hanging_device)
     source = RealSenseFrameSource(frame_timeout_ms=50)
+    assert source.start() is True
     assert source.read() is None  # open ok, then the first wait times out
     assert not source.status.connected
     assert "frame timeout" in (source.status.error or "")
@@ -276,6 +277,7 @@ def test_frame_timeout_recovers_when_frames_return(monkeypatch):
 
     monkeypatch.setattr("posture_guard.camera._open_pipeline", recovering_device)
     source = RealSenseFrameSource(frame_timeout_ms=50)
+    assert source.start() is True
     assert source.read() is None  # first open succeeds, then the wait times out
     assert "frame timeout" in (source.status.error or "")
 
@@ -387,3 +389,14 @@ def test_source_kinds_identify_the_active_implementation():
     assert SyntheticFrameSource().status.kind == "synthetic"
     assert RealSenseFrameSource().status.kind == "realsense"
     assert CameraWorker(SyntheticFrameSource()).status.kind == "synthetic"
+
+
+def test_camera_worker_auto_starts_on_read():
+    """CameraWorker implements FrameSource protocol autonomously without
+    requiring callers to invoke start() explicitly."""
+    source = _ScriptedSource([_frame(1.0)])
+    worker = CameraWorker(source)
+    try:
+        assert wait_until(lambda: worker.read() is not None)
+    finally:
+        worker.close()

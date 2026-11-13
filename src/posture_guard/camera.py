@@ -147,11 +147,13 @@ class RealSenseFrameSource:
         self._status = SourceStatus(connected=False, error="not started", kind="realsense")
         self._pipeline: object | None = None
         self._align: object | None = None
+        self._started = False
 
     def start(self) -> bool:
         """Open the pipeline with bounded retry and backoff. Missing-camera
         and USB problems become status states (connected=False, error naming
         the attempt count and last failure) — start() never raises."""
+        self._started = True
         last_error = "unknown error"
         for attempt in range(1, self._open_attempts + 1):
             try:
@@ -178,6 +180,9 @@ class RealSenseFrameSource:
 
     def read(self) -> ColorDepth | None:
         import numpy as np
+
+        if not self._started:
+            return None
 
         # Recovery path: an unopened pipeline (failed open or a prior frame
         # timeout) retries the bounded open instead of stalling.
@@ -217,7 +222,7 @@ class RealSenseFrameSource:
 
     def _close_pipeline(self) -> None:
         """Stop and forget the pipeline so the next read() reopens it."""
-        if self._pipeline is not None:
+        if self._pipeline is not None and hasattr(self._pipeline, "stop"):
             with contextlib.suppress(RuntimeError):
                 self._pipeline.stop()  # already stopped is fine; reopen is what matters
         self._pipeline = None
@@ -225,6 +230,7 @@ class RealSenseFrameSource:
 
     def close(self) -> None:
         self._close_pipeline()
+        self._started = False
         self._status = SourceStatus(connected=False, error=None, kind="realsense")
 
 
@@ -248,10 +254,12 @@ class CameraWorker:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        self._thread = threading.Thread(
-            target=self._capture_loop, name="camera-worker", daemon=True
-        )
-        self._thread.start()
+        with self._lock:
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._capture_loop, name="camera-worker", daemon=True
+                )
+                self._thread.start()
 
     def _capture_loop(self) -> None:
         while not self._stop.is_set():
@@ -269,6 +277,8 @@ class CameraWorker:
                 self._latest = frame  # single slot: older frames are dropped
 
     def read(self) -> ColorDepth | None:
+        if self._thread is None and not self._stop.is_set():
+            self.start()
         with self._lock:
             frame, self._latest = self._latest, None
         return frame

@@ -25,9 +25,11 @@ def test_realsense_start_logs_active_source_with_usb(log_source_selection, monke
 
     monkeypatch.setattr("posture_guard.camera._open_pipeline", usb3_device)
     source = build_source(AppConfig())
-
-    assert isinstance(source, SyntheticFrameSource) is False
-    assert "RealSense source active (usb 3.2)" in log_source_selection.text
+    try:
+        assert isinstance(source, SyntheticFrameSource) is False
+        assert "RealSense source active (usb 3.2)" in log_source_selection.text
+    finally:
+        source.close()
 
 
 def test_synthetic_fallback_logs_reason(log_source_selection, monkeypatch):

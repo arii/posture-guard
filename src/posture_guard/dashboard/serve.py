@@ -40,7 +40,9 @@ def build_source(config: AppConfig) -> FrameSource:
     realsense = RealSenseFrameSource(config.camera.width, config.camera.height, config.camera.fps)
     if realsense.start():
         logger.info("RealSense source active (usb %s)", realsense.status.usb_type or "unknown")
-        return CameraWorker(realsense)
+        worker = CameraWorker(realsense)
+        worker.start()
+        return worker
     reason = realsense.status.error or "camera unavailable"
     logger.info("synthetic source (reason: %s)", reason)
     print(f"synthetic source (reason: {reason})", file=sys.stderr)
