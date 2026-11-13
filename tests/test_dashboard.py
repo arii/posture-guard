@@ -360,3 +360,20 @@ def test_index_has_band_labels_and_unreliable_detail_targets() -> None:
     # Band text is composed from the server thresholds, not hardcoded.
     assert "good within" in page
     assert "payload.thresholds" in page
+
+
+def test_docs_page_is_served_and_linked_from_index() -> None:
+    """The How-it-works page lives at /docs and the main view links to it."""
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.get("/docs")
+    index = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert "How it works" in page
+    # All five sections present: pipeline, model, privacy, story, roadmap.
+    for heading in ("The pipeline", "The model", "Privacy", "Where it came from", "Roadmap"):
+        assert heading in page
+    assert index.status_code == 200
+    assert 'href="/docs"' in index.text
