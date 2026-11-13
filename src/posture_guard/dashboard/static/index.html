@@ -63,6 +63,15 @@
   }
   #camera-detail { color: var(--warn); }
   #camera-detail:empty { display: none; }
+  details.guide-details { margin-top: 10px; }
+  details.guide-details summary {
+    color: var(--muted); cursor: pointer; font-size: 13px;
+    letter-spacing: 0.04em; user-select: none;
+  }
+  details.guide-details[open] summary { margin-bottom: 8px; }
+  svg.scene { width: 100%; height: auto; display: block; }
+  .scene .lbl { font-size: 13px; fill: var(--text); }
+  .scene .lbl-sm { font-size: 11.5px; fill: var(--muted); }
   ul.guide { margin: 0; padding-left: 18px; color: var(--muted); }
   ul.guide li { margin: 4px 0; }
   button {
@@ -108,6 +117,81 @@
         <li>Alternative for deep desks: sit 1.0&ndash;1.5&nbsp;m away with the camera at chest/neck height aimed at mid-torso</li>
         <li>USB 3 port for stable depth</li>
       </ul>
+      <details class="guide-details" id="placement-guide">
+        <summary>Placement diagrams (top view and side view)</summary>
+        <svg class="scene" id="placement-guide-top" viewBox="0 0 880 300" role="img" aria-label="Top view: camera positions by angle from the user's facing direction">
+          <!-- desk edge -->
+          <rect x="180" y="24" width="520" height="14" rx="3" fill="#232a34"/>
+          <!-- monitor -->
+          <rect x="270" y="42" width="260" height="12" rx="3" fill="#10141a" stroke="#2c333e"/>
+          <text x="335" y="38" class="lbl-sm">monitor (your screen stays clear)</text>
+          <!-- green zone wedge: person at (440,200), straight-ahead = up -->
+          <path d="M440 200 L 350 34 A 175 175 0 0 1 530 34 Z" fill="rgba(76,195,106,.10)"/>
+          <!-- red zone -->
+          <path d="M440 200 L 668 176 A 228 228 0 0 0 662 116 L 640 130 A 210 210 0 0 1 640 118 Z" fill="rgba(255,92,92,.12)"/>
+          <!-- facing arrow -->
+          <line x1="440" y1="196" x2="440" y2="90" stroke="#8b95a3" stroke-width="2" stroke-dasharray="5 5"/>
+          <text x="448" y="102" class="lbl-sm">facing direction</text>
+          <!-- angle arc -->
+          <path d="M440 150 A 50 50 0 0 1 474 137" fill="none" stroke="#4cc36a" stroke-width="2"/>
+          <text x="482" y="142" class="lbl-sm" fill="#4cc36a">&#8804; 45&deg;</text>
+          <!-- person top view: head + shoulders -->
+          <circle cx="440" cy="200" r="20" fill="#8b95a3"/>
+          <line x1="408" y1="228" x2="472" y2="228" stroke="#8b95a3" stroke-width="12" stroke-linecap="round"/>
+          <text x="380" y="266" class="lbl-sm">you</text>
+          <!-- good camera -->
+          <rect x="560" y="34" width="26" height="18" rx="4" fill="#4cc36a" transform="rotate(30 573 43)"/>
+          <circle cx="588" cy="66" r="4" fill="#0b0e13" stroke="#4cc36a" stroke-width="1.5"/>
+          <line x1="585" y1="70" x2="462" y2="192" stroke="#4cc36a" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <text x="600" y="52" class="lbl" fill="#4cc36a">here: ~40&deg; &#8212; works</text>
+          <text x="600" y="70" class="lbl-sm">mount it HIGH (shelf / wall),</text>
+          <text x="600" y="86" class="lbl-sm">aimed down at your torso</text>
+          <!-- bad camera -->
+          <rect x="680" y="120" width="26" height="18" rx="4" fill="#ff5c5c" transform="rotate(75 693 129)"/>
+          <line x1="678" y1="140" x2="468" y2="196" stroke="#ff5c5c" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <text x="712" y="136" class="lbl" fill="#ff5c5c">fully side-on: ~85&deg;</text>
+          <text x="712" y="154" class="lbl-sm">shoulder-level and head-tilt</text>
+          <text x="712" y="170" class="lbl-sm">stop working &#8212; UNRELIABLE</text>
+        </svg>
+        <svg class="scene" id="placement-guide-side" viewBox="0 0 880 340" role="img" aria-label="Side view: camera above and beside the monitor, tilted down at the torso">
+          <line x1="20" y1="322" x2="860" y2="322" stroke="#2c333e" stroke-width="2"/>
+          <!-- desk -->
+          <rect x="60" y="188" width="170" height="9" rx="2" fill="#232a34"/>
+          <rect x="70" y="197" width="8" height="123" fill="#232a34"/>
+          <rect x="212" y="197" width="8" height="123" fill="#232a34"/>
+          <rect x="190" y="180" width="36" height="7" rx="2" fill="#2c333e"/>
+          <!-- monitor -->
+          <rect x="104" y="66" width="66" height="114" rx="4" fill="#10141a" stroke="#2c333e" stroke-width="1.5"/>
+          <text x="96" y="56" class="lbl-sm">screen &#8212; nothing blocks it</text>
+          <!-- camera high right -->
+          <rect x="196" y="26" width="20" height="14" rx="3" fill="#4cc36a" transform="rotate(40 206 33)"/>
+          <circle cx="216" cy="46" r="4" fill="#0b0e13" stroke="#4cc36a" stroke-width="1.5"/>
+          <text x="238" y="30" class="lbl" fill="#4cc36a">shelf / wall mount, above and beside the monitor</text>
+          <text x="238" y="48" class="lbl-sm">tilt down ~45&deg; and slightly inward, at your mid-torso</text>
+          <!-- sightline cone -->
+          <polygon points="219,49 420,180 470,300" fill="rgba(76,195,106,.10)" stroke="#4cc36a" stroke-width="1" stroke-dasharray="4 4"/>
+          <!-- person -->
+          <g stroke="#8b95a3" fill="none" stroke-linecap="round">
+            <circle cx="312" cy="96" r="22" fill="#8b95a3" stroke="none"/>
+            <line x1="306" y1="120" x2="309" y2="130" stroke-width="11"/>
+            <line x1="306" y1="134" x2="314" y2="236" stroke-width="32"/>
+            <line x1="300" y1="140" x2="264" y2="174" stroke-width="12"/>
+            <line x1="264" y1="174" x2="228" y2="190" stroke-width="10"/>
+            <line x1="312" y1="242" x2="252" y2="248" stroke-width="24"/>
+            <line x1="254" y1="254" x2="252" y2="310" stroke-width="13"/>
+            <line x1="252" y1="314" x2="236" y2="318" stroke-width="8"/>
+          </g>
+          <g stroke="#2c333e" stroke-width="8" stroke-linecap="round">
+            <line x1="312" y1="248" x2="384" y2="248"/>
+            <line x1="378" y1="136" x2="382" y2="244"/>
+            <line x1="342" y1="254" x2="344" y2="300"/>
+            <line x1="344" y1="300" x2="324" y2="320" stroke-width="6"/>
+            <line x1="344" y1="300" x2="364" y2="320" stroke-width="6"/>
+          </g>
+          <circle cx="314" cy="240" r="7" fill="none" stroke="#4cc36a" stroke-width="2" stroke-dasharray="3 3"/>
+          <text x="470" y="240" class="lbl-sm">head &#10003; shoulders &#10003; hips &#10003;</text>
+        </svg>
+      </details>
       <button id="test-nudge">&#9654; Test nudge</button>
     </div>
   </div>
