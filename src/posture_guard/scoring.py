@@ -148,10 +148,21 @@ def measure_head_tilt(landmarks: Sequence[Landmark]) -> float:
 
 
 def measure_shoulder_level(landmarks: Sequence[Landmark]) -> float:
-    """Shoulder level: signed angle of the inter-shoulder vector vs horizontal."""
+    """Shoulder level: signed tilt of the inter-shoulder line vs horizontal,
+    folded into (-90, 90).
+
+    Folding is required because the raw atan2 over the inter-shoulder vector
+    wraps to ~+/-180 when RIGHT_SHOULDER lands left of LEFT_SHOULDER in
+    image coordinates (mirrored / high side-mount framing), reading level
+    shoulders as a ~178 degree slouch. The shoulder line is undirected -
+    only its deviation from horizontal matters - so folding into (-90, 90)
+    loses nothing the scoring consumes. atan2(dy, abs(dx)) performs the
+    fold while keeping the sign tied to dy alone (positive = right shoulder
+    lower), so the value is identical with and without x-mirroring instead
+    of flipping to the folded mirror of the true tilt."""
     dy = landmarks[RIGHT_SHOULDER].y - landmarks[LEFT_SHOULDER].y
     dx = landmarks[RIGHT_SHOULDER].x - landmarks[LEFT_SHOULDER].x
-    return math.degrees(math.atan2(dy, dx))
+    return math.degrees(math.atan2(dy, abs(dx)))
 
 
 def valid_depth_median(samples: Sequence[float]) -> float | None:

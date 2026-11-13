@@ -4,14 +4,19 @@ All angle assertions use a 1-degree tolerance per the spec acceptance table.
 Expected values are the precomputed constants in conftest.py.
 """
 
+import math
+
 import pytest
 
-from conftest import GOOD_ANGLES, SLOUCHED_ANGLES, make_pose
+from conftest import GOOD_ANGLES, SLOUCHED_ANGLES, make_pose, mirror_x
 from posture_guard.config import ScoringConfig
 from posture_guard.scoring import (
     LEFT_EAR,
     LEFT_HIP,
+    LEFT_SHOULDER,
+    RIGHT_EAR,
     RIGHT_HIP,
+    RIGHT_SHOULDER,
     ScoredPosture,
     SimpleLandmark,
     Unreliable,
@@ -66,6 +71,89 @@ class TestMetrics:
             5.71, abs=ANGLE_TOLERANCE_DEG
         )
 
+
+class TestMirroredFramings:
+    """Mirrored / high side-mount framings: MediaPipe's RIGHT_SHOULDER can
+    land left of LEFT_SHOULDER in image coordinates (dx < 0). Regression
+    tests for the shoulder-level atan2 wrap (level shoulders read ~180 deg)."""
+
+    def test_mirrored_level_shoulders_read_near_zero(self):
+        # Right shoulder (0.30) left of the left one (0.40), shoulders
+        # level: the raw atan2 wraps to 180 deg and fails the +/-6 deg
+        # threshold.
+        pose = make_pose({RIGHT_SHOULDER: SimpleLandmark(x=0.30, y=0.60)})
+        assert measure_shoulder_level(pose) == pytest.approx(0.0, abs=ANGLE_TOLERANCE_DEG)
+
+    def test_mirrored_good_pose_scores_good_zone(self):
+        # End-to-end: a mirrored good pose must score good, not bad/unreliable.
+        result = score_pose(mirror_x(make_pose()), depth_m=1.4, cfg=CFG)
+        assert_matches(result, GOOD_ANGLES)
+        assert zone_of(result, CFG) == "good"
+
+    def test_right_shoulder_lower_sign_preserved_under_mirroring(self):
+        # Right shoulder clearly lower (dy = +0.10 over 0.20 of width):
+        # the tilt must read +26.6 deg in BOTH framings per the current
+        # convention (positive = right shoulder lower) — not the folded
+        # mirror (-26.6) and not a wrapped value near +/-180 or +/-153.
+        tilt = math.degrees(math.atan2(0.10, 0.20))  # ~26.57 deg
+        upright = make_pose(
+            {
+                LEFT_SHOULDER: SimpleLandmark(x=0.40, y=0.60),
+                RIGHT_SHOULDER: SimpleLandmark(x=0.60, y=0.70),
+            }
+        )
+        assert measure_shoulder_level(upright) == pytest.approx(tilt, abs=ANGLE_TOLERANCE_DEG)
+        assert measure_shoulder_level(mirror_x(upright)) == pytest.approx(
+            tilt, abs=ANGLE_TOLERANCE_DEG
+        )
+
+    def test_head_tilt_magnitude_invariant_under_mirroring(self):
+        # Head tilt is a relative angle between the inter-ear and
+        # inter-shoulder vectors. x-mirroring negates both vectors' x
+        # components: the dot product is unchanged and the cross product
+        # negates (a reflection reverses orientation), so the signed angle
+        # flips sign while its magnitude — the only thing the +/-12 deg
+        # threshold consumes — is invariant. Verified, not assumed.
+        tilted = make_pose(
+            {
+                LEFT_EAR: SimpleLandmark(x=0.45, y=0.46),
+                RIGHT_EAR: SimpleLandmark(x=0.55, y=0.44),
+            }
+        )
+        upright_tilt = measure_head_tilt(tilted)
+        mirrored_tilt = measure_head_tilt(mirror_x(tilted))
+        assert mirrored_tilt == pytest.approx(-upright_tilt, abs=ANGLE_TOLERANCE_DEG)
+        assert abs(mirrored_tilt) == pytest.approx(
+            abs(upright_tilt), abs=ANGLE_TOLERANCE_DEG
+        )
+        assert 11 < abs(mirrored_tilt) < 12  # expected magnitude ~11.31 deg
+
+    def test_head_forward_and_trunk_lean_do_not_wrap_under_mirroring(self):
+        # Head forward and trunk lean measure deviation from vertical via
+        # atan2(dx, dy) with dy > 0 for any upright pose; mirroring only
+        # negates dx, so the angle negates and can never wrap to +/-180.
+        slouched = make_pose(
+            {
+                LEFT_EAR: SimpleLandmark(x=0.48, y=0.54),
+                RIGHT_EAR: SimpleLandmark(x=0.56, y=0.54),
+            }
+        )
+        leaning = make_pose(
+            {
+                LEFT_SHOULDER: SimpleLandmark(x=0.45, y=0.60),
+                RIGHT_SHOULDER: SimpleLandmark(x=0.65, y=0.60),
+                LEFT_EAR: SimpleLandmark(x=0.51, y=0.45),
+                RIGHT_EAR: SimpleLandmark(x=0.59, y=0.45),
+            }
+        )
+        for func, pose in (
+            (measure_head_forward, slouched),
+            (measure_trunk_lean, leaning),
+        ):
+            value = func(pose)
+            mirrored_value = func(mirror_x(pose))
+            assert mirrored_value == pytest.approx(-value, abs=ANGLE_TOLERANCE_DEG)
+            assert abs(mirrored_value) < 90  # no +/-180 wrap
 
 
 class TestScorePoseGates:
