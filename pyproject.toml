@@ -12,12 +12,16 @@ license = { text = "MIT" }
 dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
+    # Dashboard is part of the always-on runtime, not a hardware extra.
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "httpx>=0.27",  # TestClient transport for the dashboard tests
 ]
 # Heavy camera/pose deps are optional so CI and dev machines install fast.
 # The RealSense and MediaPipe imports are lazy (inside camera.py / pose.py).
