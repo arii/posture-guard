@@ -15,7 +15,7 @@ import pytest
 
 from conftest import make_pose
 from posture_guard.camera import ColorDepth, SourceStatus, SyntheticFrameSource
-from posture_guard.config import AppConfig, ScoringConfig
+from posture_guard.config import AppConfig, FeedbackConfig, PositiveChimeConfig, ScoringConfig
 from posture_guard.dashboard.hub import DashboardHub, ScoringThresholds
 from posture_guard.feedback import FeedbackMode, RuntimeFeedback
 from posture_guard.pipeline import PosturePipeline, placement_warnings
@@ -413,3 +413,45 @@ def test_center_depth_median_ignores_invalid_values() -> None:
     depth[200:280, 240:400] = 0  # invalid zeros inside the center box
 
     assert center_depth_m(depth) == pytest.approx(1.4)
+
+
+def _positive_pipeline(mode: FeedbackMode) -> tuple[PosturePipeline, DashboardHub, RecordingAudio]:
+    config = AppConfig(
+        feedback=FeedbackConfig(positive_chime=PositiveChimeConfig(enabled=True, every_seconds=5.0))
+    )
+    hub = DashboardHub()
+    audio = RecordingAudio()
+    pipeline = PosturePipeline(
+        SyntheticFrameSource(),
+        config,
+        hub=hub,
+        audio=audio,
+        detector=MutableDetector(make_pose()),
+        renderer=fake_jpeg,
+        feedback=RuntimeFeedback(mode=mode),
+    )
+    return pipeline, hub, audio
+
+
+def test_positive_chime_enqueued_after_sustained_good() -> None:
+    pipeline, hub, audio = _positive_pipeline(FeedbackMode.CHIME_AND_VOICE)
+    try:
+        feed(pipeline, pipeline._detector, 8.0, 0)  # noqa: SLF001 - test harness access
+        assert Nudge.POSITIVE_CHIME in audio.enqueued
+        snapshot, _ = hub.latest_metrics()
+        assert snapshot.nudge_event["kind"] == "positive_chime"
+        assert snapshot.nudge_event["muted"] is False
+    finally:
+        pipeline.close()
+
+
+def test_silent_mode_mutes_positive_chime_but_records_event() -> None:
+    pipeline, hub, audio = _positive_pipeline(FeedbackMode.SILENT)
+    try:
+        feed(pipeline, pipeline._detector, 8.0, 0)  # noqa: SLF001 - test harness access
+        assert audio.enqueued == []
+        snapshot, _ = hub.latest_metrics()
+        assert snapshot.nudge_event["kind"] == "positive_chime"
+        assert snapshot.nudge_event["muted"] is True  # visible event, no audio
+    finally:
+        pipeline.close()

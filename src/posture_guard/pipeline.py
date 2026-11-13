@@ -185,7 +185,8 @@ class PosturePipeline:
         self._detector: PoseDetector = detector if detector is not None else default_detector()
         self._renderer = renderer or default_frame_renderer
         self._state_machine = PostureStateMachine(
-            config.state, config.scoring, timings_override=feedback
+            config.state, config.scoring, timings_override=feedback,
+            positive_chime=config.feedback,
         )
         self._thresholds = ScoringThresholds(
             head_forward_deg=config.scoring.head_forward_deg,

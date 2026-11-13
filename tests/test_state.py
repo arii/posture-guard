@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import make_pose
-from posture_guard.config import ScoringConfig, StateConfig
+from posture_guard.config import FeedbackConfig, PositiveChimeConfig, ScoringConfig, StateConfig
 from posture_guard.feedback import RuntimeFeedback
 from posture_guard.scoring import (
     LEFT_EAR,
@@ -63,6 +63,63 @@ def grid(start: float, stop: float, step: float, result) -> list[tuple[float, ob
         out.append((round(now, 3), result))
         now += step
     return out
+
+
+class TestPositiveChime:
+    """Positive reinforcement: in GOOD state, fire at most once per
+    every_seconds of continuously good posture; the timer restarts on fire and
+    on any departure from GOOD."""
+
+    POSITIVE = FeedbackConfig(positive_chime=PositiveChimeConfig(enabled=True, every_seconds=10.0))
+
+    def _machine(self, positive: FeedbackConfig | None = POSITIVE) -> PostureStateMachine:
+        return PostureStateMachine(TIMINGS, CFG, positive_chime=positive)
+
+    @staticmethod
+    def _positive_times(samples, transitions):  # noqa: ANN001
+        return [
+            now for (now, _), transition in zip(samples, transitions, strict=False)
+            if transition.nudge is Nudge.POSITIVE_CHIME
+        ]
+
+    def test_fires_only_after_sustained_good(self) -> None:
+        machine = self._machine()
+        samples = grid(0.0, 11.5, 0.1, GOOD)
+        transitions = run(machine, samples)
+        # GOOD confirmed at 1.0 -> first positive chime one full interval later.
+        assert self._positive_times(samples, transitions) == [11.0]
+
+    def test_cooldown_restarts_after_each_fire(self) -> None:
+        machine = self._machine()
+        samples = grid(0.0, 21.5, 0.1, GOOD)
+        transitions = run(machine, samples)
+        assert self._positive_times(samples, transitions) == [11.0, 21.0]
+
+    def test_disabled_never_fires(self) -> None:
+        machine = self._machine(
+            FeedbackConfig(positive_chime=PositiveChimeConfig(enabled=False, every_seconds=10.0))
+        )
+        samples = grid(0.0, 25.0, 0.1, GOOD)
+        transitions = run(machine, samples)
+        assert self._positive_times(samples, transitions) == []
+
+    def test_bad_episode_resets_the_interval(self) -> None:
+        machine = self._machine()
+        samples = grid(0.0, 12.0, 0.1, GOOD)
+        samples += grid(12.1, 16.0, 0.1, _bad_pose_score())
+        samples += grid(16.1, 29.5, 0.1, GOOD)
+        transitions = run(machine, samples)
+        # Recovered to GOOD at ~19.1 (recovery_good_s) -> next fire 10 s later.
+        assert self._positive_times(samples, transitions) == pytest.approx([11.0, 29.2])
+
+    def test_unreliable_frames_reset_the_interval(self) -> None:
+        machine = self._machine()
+        samples = grid(0.0, 9.0, 0.1, GOOD)
+        samples += grid(9.1, 9.5, 0.1, LOW_VIS)
+        samples += grid(9.6, 12.0, 0.1, GOOD)
+        transitions = run(machine, samples)
+        # GOOD re-confirmed at ~9.6 after the unreliable gap -> no fire by 12.0.
+        assert self._positive_times(samples, transitions) == []
 
 
 class TestLiveVoiceTimings:

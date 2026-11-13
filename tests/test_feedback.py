@@ -39,6 +39,15 @@ class TestAllows:
         assert feedback.allows(Nudge.CHIME)
         assert not feedback.allows(Nudge.VOICE)
 
+    def test_silent_drops_positive_chime(self) -> None:
+        feedback = RuntimeFeedback(mode=FeedbackMode.SILENT)
+        assert not feedback.allows(Nudge.POSITIVE_CHIME)
+
+    def test_chime_only_allows_positive_chime(self) -> None:
+        # The positive chime is a chime, not a voice prompt: chime-only keeps it.
+        feedback = RuntimeFeedback(mode=FeedbackMode.CHIME_ONLY)
+        assert feedback.allows(Nudge.POSITIVE_CHIME)
+
     def test_silent_drops_both(self) -> None:
         feedback = RuntimeFeedback(mode=FeedbackMode.SILENT)
         assert not feedback.allows(Nudge.CHIME)

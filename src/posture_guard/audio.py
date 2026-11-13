@@ -65,6 +65,22 @@ def _render_chime(path: Path) -> None:
         handle.writeframes(b"".join(struct.pack("<h", int(s * 32767)) for s in samples))
 
 
+def _render_positive_chime(path: Path) -> None:
+    """Bright ascending major arpeggio (C5-E5-G5-C6, ~0.8 s), 16-bit mono WAV —
+     deliberately distinct from the falling two-tone reminder chime."""
+    samples: list[float] = []
+    for freq in (523.25, 659.25, 783.99, 1046.50):
+        total = int(SAMPLE_RATE * 0.2)
+        for i in range(total):
+            decay = math.exp(-3.0 * i / total)
+            samples.append(0.6 * decay * math.sin(2 * math.pi * freq * i / SAMPLE_RATE))
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(b"".join(struct.pack("<h", int(s * 32767)) for s in samples))
+
+
 class AudioWorker:
     """Serialized nudge playback on a dedicated daemon thread.
 
@@ -193,6 +209,9 @@ class AudioWorker:
         chime_path = self._sound_dir / "chime.wav"
         _render_chime(chime_path)
         self._sounds[Nudge.CHIME] = chime_path
+        positive_path = self._sound_dir / "positive-chime.wav"
+        _render_positive_chime(positive_path)
+        self._sounds[Nudge.POSITIVE_CHIME] = positive_path
         voice_path = self._sound_dir / "voice.wav"
         backend = self._render_voice(self._config.voice_text, voice_path)
         if backend is not None:

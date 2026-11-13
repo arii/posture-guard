@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+import wave
 from collections.abc import Callable
 
 from posture_guard.audio import AudioWorker, CommandResult
@@ -300,4 +301,22 @@ def test_test_nudge_forces_chime_then_voice_past_dedupe(tmp_path):
         assert runner.play_calls()[1][1].endswith("voice.wav")
     finally:
         runner.release_first_play.set()
+        worker.close()
+
+
+def test_startup_pre_renders_positive_chime(tmp_path):
+    runner = FakeRunner()
+    worker = make_worker(tmp_path, runner)
+    status = worker.start()
+    try:
+        positive = tmp_path / "sounds" / "positive-chime.wav"
+        assert positive.stat().st_size > 0
+        with wave.open(str(positive)) as handle:
+            assert handle.getframerate() == 44100
+            assert handle.getnframes() > 44100 // 2  # at least ~0.5 s of audio
+        worker.enqueue(Nudge.POSITIVE_CHIME)
+        assert wait_until(lambda: len(runner.play_calls()) == 1)
+        assert runner.play_calls()[0][1].endswith("positive-chime.wav")
+        assert status.ready
+    finally:
         worker.close()

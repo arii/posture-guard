@@ -66,11 +66,26 @@ class AudioConfig:
 
 
 @dataclass(frozen=True)
+class PositiveChimeConfig:
+    """Positive reinforcement: an upbeat chime after posture stays GOOD for
+    `every_seconds`; the timer restarts each time it plays."""
+
+    enabled: bool = True
+    every_seconds: float = 120.0
+
+
+@dataclass(frozen=True)
+class FeedbackConfig:
+    positive_chime: PositiveChimeConfig = field(default_factory=PositiveChimeConfig)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     state: StateConfig = field(default_factory=StateConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
 
 
 def _build(cls, data: dict | None):  # noqa: ANN201 - factory helper
@@ -94,4 +109,13 @@ def load_config(path: str | Path) -> AppConfig:
         scoring=_build(ScoringConfig, raw.get("scoring")),
         state=_build(StateConfig, raw.get("state")),
         audio=_build(AudioConfig, raw.get("audio")),
+        feedback=_build_feedback(raw.get("feedback")),
+    )
+
+
+def _build_feedback(data: dict | None) -> FeedbackConfig:  # noqa: ANN201 - factory helper
+    """Build FeedbackConfig; positive_chime is a nested mapping."""
+    data = data or {}
+    return FeedbackConfig(
+        positive_chime=_build(PositiveChimeConfig, data.get("positive_chime")),
     )
