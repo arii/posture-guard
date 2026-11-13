@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from posture_guard.dashboard.needle import composite_score, metric_severity
 
 THRESHOLDS = {
@@ -42,7 +44,9 @@ def test_unavailable_metrics_are_skipped():
         "shoulder_level_deg": 0.0,
         "trunk_lean_deg": None,
     }
-    assert composite_score(metrics, THRESHOLDS) == 100.0 / 3.0  # pytest.approx-free: exact in binary
+    # One severity-1 contribution out of three usable metrics: order of the
+    # sum/mean is an implementation detail, so compare with approx.
+    assert composite_score(metrics, THRESHOLDS) == pytest.approx(100.0 / 3.0)
 
 
 def test_missing_threshold_skips_metric_and_none_when_nothing_usable():
