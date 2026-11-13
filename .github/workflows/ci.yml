@@ -32,3 +32,18 @@ jobs:
           sudo apt-get install -y -qq shellcheck
           shellcheck setup.sh
           shellcheck -x Makefile
+
+  hardware-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with hardware extra
+        run: pip install '.[hardware,dev]'
+      - name: Smoke-check real SDK APIs
+        # Asserts the installed pyrealsense2/mediapipe wheels expose every
+        # attribute camera.py and pose.py use, so stubbed unit tests cannot
+        # hide API drift. A missing wheel for this Python fails loudly here.
+        run: python tests/smoke_hardware.py
