@@ -75,8 +75,10 @@ distance — roughly the range 0.6–2.5 m), and the metric tiles.
 **Skeleton check:** sit down facing the camera and confirm the skeleton overlay
 tracks you — head, shoulders and torso lines on your body, not drifting or snapping
 to furniture. The placement guide under the video is a live checklist: person fully
-in frame, torso inside the depth band, camera at head height. Fix the camera
-position until no placement warning shows.
+in frame, torso inside the depth band, camera at chest/neck height aimed at
+mid-torso. Sit 1.0–1.5 m from the camera so head and hips are both in frame
+(at close range the vertical field of view cannot cover a seated person).
+Fix the camera position until no placement warning shows.
 
 ### 3. Test nudge
 

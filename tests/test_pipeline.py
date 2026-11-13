@@ -20,6 +20,10 @@ from posture_guard.dashboard.hub import DashboardHub
 from posture_guard.pipeline import PosturePipeline, placement_warnings
 from posture_guard.pose import PoseDetection, SyntheticPoseDetector, center_depth_m
 from posture_guard.scoring import (
+    LEFT_EAR,
+    LEFT_HIP,
+    RIGHT_EAR,
+    RIGHT_HIP,
     RIGHT_SHOULDER,
     SimpleLandmark,
     Unreliable,
@@ -154,7 +158,37 @@ def test_cropped_person_surfaces_low_visibility_warning() -> None:
     snapshot, _ = hub.latest_metrics()
     assert snapshot.state == "unreliable"
     assert snapshot.warnings == (
-        "person not fully in frame - keep shoulders and hips visible",
+        "shoulders not visible - sit facing the camera, 1.0-1.5 m away",
+    )
+    # Hips out of frame is the close-range geometry failure: name the lost
+    # metric and the fix (move back), matching the runbook guidance.
+    from posture_guard.pipeline import low_visibility_warning
+
+    assert low_visibility_warning(
+        make_pose({LEFT_HIP: SimpleLandmark(x=0.48, y=0.80, visibility=0.0),
+                   RIGHT_HIP: SimpleLandmark(x=0.52, y=0.80, visibility=0.0)}),
+        ScoringConfig(),
+    ) == "hips not visible - trunk lean unavailable, move back to 1.0-1.5 m"
+
+
+def test_low_visibility_warning_names_head_when_ears_cropped() -> None:
+    from posture_guard.pipeline import low_visibility_warning
+
+    cropped = make_pose({LEFT_EAR: SimpleLandmark(x=0.50, y=0.10, visibility=0.0),
+                         RIGHT_EAR: SimpleLandmark(x=0.52, y=0.10, visibility=0.0)})
+    detector = MutableDetector(cropped)
+    pipeline, hub, _ = build_pipeline(detector)
+
+    feed(pipeline, detector, 1.2, 0)
+
+    snapshot, _ = hub.latest_metrics()
+    assert snapshot.state == "unreliable"
+    assert snapshot.warnings == (
+        "head not visible - sit facing the camera, 1.0-1.5 m away",
+    )
+    # Pure-function fallback: no landmarks at all still names the generic fix.
+    assert low_visibility_warning(None, pipeline._config.scoring) == (
+        "person not fully in frame - sit facing the camera, 1.0-1.5 m away"
     )
 
 
