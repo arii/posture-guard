@@ -77,6 +77,8 @@
   }
   #camera-detail, #unreliable-detail { color: var(--warn); }
   #camera-detail:empty { display: none; }
+  #audio-error { color: var(--bad); }
+  #audio-error:empty { display: none; }
   details.guide-details { margin-top: 10px; }
   details.guide-details summary {
     color: var(--muted); cursor: pointer; font-size: 13px;
@@ -147,7 +149,7 @@
       </div>
       <div class="status-row">
         <span class="stat">camera <b id="camera">-</b><span id="camera-detail" class="stat"></span></span>
-        <span class="stat">audio <b id="audio">-</b></span>
+        <span class="stat">audio <b id="audio">-</b><span id="audio-detail" class="stat"></span><span id="audio-error" class="stat"></span></span>
         <span id="unreliable-detail" class="stat"></span>
       </div>
     </div>
@@ -234,7 +236,7 @@
           <text x="470" y="240" class="lbl-sm">head &#10003; shoulders &#10003; hips &#10003;</text>
         </svg>
       </details>
-      <button id="test-nudge">&#9654; Test nudge</button>
+      <button id="test-nudge">&#9654; Test reminder</button>
     </div>
     <div class="panel" style="margin-top: 16px">
       <h2>Feedback</h2>
@@ -329,8 +331,7 @@ function applyNudgeEvent(event) {
   if (!event || event.seq === lastNudgeSeq) return;
   lastNudgeSeq = event.seq;
   const muted = event.muted ? " (muted)" : "";
-  nudgeEventEl.textContent =
-    (event.kind === "voice" ? "voice prompt" : "chime") + muted;
+  nudgeEventEl.textContent = reminderLabel(event) + muted;
   nudgeEventEl.classList.add("show");
   badge.classList.remove("pulse");
   void badge.offsetWidth; // restart the animation on repeated nudges
@@ -342,6 +343,13 @@ function applyNudgeEvent(event) {
     badge.classList.remove("pulse");
     pulseActive = false;
   }, 2000);
+}
+
+function reminderLabel(event) {
+  // Plain language: every reminder names itself. Voice shows the spoken text.
+  if (event.kind === "voice") return "Reminder: " + (event.text || "spoken prompt");
+  if (event.kind === "chime") return "Reminder: chime";
+  return "Reminder: " + (event.text || event.kind);
 }
 
 function apply(payload) {
@@ -371,18 +379,35 @@ function apply(payload) {
   document.getElementById("camera-detail").textContent =
     cam.error ? " - " + cam.error : "";
   const aud = payload.audio;
-  document.getElementById("audio").textContent = aud.ready
-    ? (aud.sink ? aud.sink : "default sink")
-    : "not ready";
+  const audioEl = document.getElementById("audio");
+  audioEl.textContent = aud.ready ? "ready" : "not ready";
+  const audioBits = [];
+  if (aud.tts_backend) audioBits.push(aud.tts_backend);
+  audioBits.push(aud.sink ? "sink " + aud.sink : "sink default");
+  document.getElementById("audio-detail").textContent = " \u00B7 " + audioBits.join(" \u00B7 ");
+  // A silent speaker must be diagnosable from the page: playback errors show
+  // in red on the audio line.
+  document.getElementById("audio-error").textContent =
+    aud.error ? " \u00B7 audio error: " + aud.error : "";
   last.landmarks = payload.landmarks.length ? payload.landmarks : null;
   drawSkeleton();
   applyFeedback(payload.feedback);
   applyNudgeEvent(payload.nudge_event);
+  // Trunk-lean-optional mode: the tile shows "-" with the reason instead of a
+  // garbage angle (overwrites the healthy-band label for that tile).
+  if (payload.trunk_note) {
+    document.getElementById("b-trunk_lean_deg").textContent = payload.trunk_note;
+  }
 }
 
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onmessage = (event) => apply(JSON.parse(event.data));
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    // Test-endpoint reminders arrive as their own message type (no snapshot).
+    if (data.type === "nudge_event") { applyNudgeEvent(data); return; }
+    apply(data);
+  };
   ws.onclose = () => setTimeout(connect, 1000);
 }
 connect();

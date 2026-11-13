@@ -275,7 +275,7 @@ def test_chime_only_mode_drops_voice_only() -> None:
     assert hub.latest_metrics()[0].state == "bad_voice"
     assert audio.enqueued == [Nudge.CHIME]  # voice never reaches the sink
     assert hub.latest_metrics()[0].nudge_event == {
-        "kind": "voice", "seq": 2, "muted": True,
+        "kind": "voice", "seq": 2, "muted": True, "text": "fix your posture",
     }
 
 
@@ -314,6 +314,44 @@ def test_two_chime_emissions_produce_two_sequence_numbers() -> None:
 
     assert first["kind"] == "chime" and second["kind"] == "chime"
     assert second["seq"] > first["seq"]
+
+
+def test_trunk_lean_optional_fires_reminders_with_hips_hidden() -> None:
+    """High-mount reliability mode: hips permanently below the visibility floor
+    must not block head-forward reminders (the stuck-UNRELIABLE bug report),
+    and the trunk tile reports unavailable instead of a garbage angle."""
+    hips_hidden = {
+        LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.3),
+        RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.3),
+    }
+    detector = MutableDetector(make_pose(dict(hips_hidden)))
+    hub = DashboardHub()
+    audio = RecordingAudio()
+    pipeline = PosturePipeline(
+        SyntheticFrameSource(),
+        AppConfig(scoring=ScoringConfig(trunk_lean_required=False)),
+        hub=hub,
+        audio=audio,
+        detector=detector,
+        renderer=fake_jpeg,
+        feedback=RuntimeFeedback(),
+    )
+
+    index = feed(pipeline, detector, 2.0, 0)  # settles GOOD without hips
+    detector.pose = make_pose(
+        {
+            7: SimpleLandmark(x=0.48, y=0.54),
+            8: SimpleLandmark(x=0.56, y=0.54),
+            **hips_hidden,
+        }
+    )
+    feed(pipeline, detector, 2.5, index)  # slouch past bad_sustain_s
+
+    assert hub.latest_metrics()[0].state == "bad_chime"
+    assert audio.enqueued == [Nudge.CHIME]
+    snapshot, _ = hub.latest_metrics()
+    assert snapshot.trunk_lean_deg is None
+    assert snapshot.trunk_note == "\u2014 trunk lean unavailable (hips not visible)"
 
 
 def test_threaded_pipeline_runs_against_synthetic_source() -> None:

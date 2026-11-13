@@ -96,6 +96,46 @@ def test_startup_pre_renders_chime_and_voice_prompt(tmp_path):
         worker.close()
 
 
+def test_voice_prompt_renders_voice_text_not_chime_text(tmp_path):
+    """The spoken prompt is AudioConfig.voice_text, wired from config.yaml."""
+    runner = FakeRunner()
+    worker = make_worker(
+        tmp_path, runner, config=AudioConfig(voice_text="please sit up")
+    )
+    worker.start()
+    try:
+        renders = runner.render_calls("pico2wave")
+        assert len(renders) == 1
+        assert renders[0][-1] == "please sit up"
+    finally:
+        worker.close()
+
+
+def test_paplay_failure_falls_back_to_default_sink_and_records_both(tmp_path):
+    """A dead configured sink retries once on the paplay default sink, and
+    _error names both attempts so silence is diagnosable from the dashboard."""
+    runner = FakeRunner(pactl_sinks=PACTL_SINKS, fail_paplay=True)
+    worker = make_worker(
+        tmp_path, runner, available={"pico2wave", "pactl"},
+        config=AudioConfig(sink="alsa_output.usb-C-Media_Electronics_Box-00.analog-stereo"),
+    )
+    worker.start()
+    worker.enqueue(Nudge.CHIME)
+    try:
+        assert wait_until(lambda: worker.status.error is not None)
+        plays = runner.play_calls()
+        assert len(plays) == 2
+        assert plays[0][:3] == [
+            "paplay", "--sink", "alsa_output.usb-C-Media_Electronics_Box-00.analog-stereo",
+        ]
+        assert "--sink" not in plays[1]  # second attempt: paplay default sink
+        error = worker.status.error
+        assert "exited 1" in error
+        assert "default" in error  # both attempts named
+    finally:
+        worker.close()
+
+
 def test_tts_falls_back_to_espeak_ng(tmp_path):
     runner = FakeRunner()
     worker = make_worker(tmp_path, runner, available={"espeak-ng"})

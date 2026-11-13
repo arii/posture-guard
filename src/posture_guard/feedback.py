@@ -48,7 +48,7 @@ class RuntimeFeedback:
             mode=FeedbackMode.CHIME_AND_VOICE,
             voice_delay_s=config.state.voice_delay_s,
             voice_repeat_cooldown_s=config.state.voice_repeat_cooldown_s,
-            chime_text=config.audio.chime_text,
+            chime_text=config.audio.voice_text,
         )
 
     # -- reads (hot path: every frame) -------------------------------------------

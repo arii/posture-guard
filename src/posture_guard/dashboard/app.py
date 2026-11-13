@@ -78,6 +78,7 @@ def create_app(
         await websocket.accept()
         hub.add_client(websocket)
         last_seq = -1
+        direct_seq = -1
         try:
             while True:
                 latest = hub.latest_metrics()
@@ -85,6 +86,14 @@ def create_app(
                     snapshot, seq = latest
                     last_seq = seq
                     await websocket.send_json(snapshot.to_payload())
+                # Test-endpoint reminders publish without a snapshot; push them
+                # straight through so the banner fires on click, not on the
+                # next metrics frame.
+                direct = hub.latest_direct_event()
+                if direct is not None and direct[1] != direct_seq:
+                    event, seq = direct
+                    direct_seq = seq
+                    await websocket.send_json({"type": "nudge_event", **event})
                 # Short receive timeout doubles as disconnect detection, so a
                 # dead client is dropped even when no new metrics arrive.
                 try:
@@ -101,16 +110,21 @@ def create_app(
     @app.post("/nudge/test")
     def nudge_test() -> dict[str, str]:
         audio.test_nudge()
+        hub.publish_nudge_event("test", text="chime + voice")
         return {"status": "queued"}
 
     @app.post("/nudge/chime")
     def nudge_chime() -> dict[str, str]:
         audio.play_chime()
+        hub.publish_nudge_event("chime")
         return {"status": "queued"}
 
     @app.post("/nudge/voice")
     def nudge_voice() -> dict[str, str]:
         audio.play_voice()
+        hub.publish_nudge_event(
+            "voice", text=feedback.prompt_text() if feedback is not None else None
+        )
         return {"status": "queued"}
 
     @app.post("/feedback/settings")

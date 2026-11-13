@@ -36,6 +36,10 @@ class ScoringConfig:
     visibility_floor: float = 0.5
     depth_min_m: float = 0.6
     depth_max_m: float = 2.5
+    # High-mount framing can keep hips permanently below the visibility floor;
+    # set false to score ears/shoulders only (trunk lean drops out of the BAD
+    # decision and reports unavailable) so head-forward reminders still fire.
+    trunk_lean_required: bool = True
 
     def bad_exit(self, enter_threshold: float) -> float:
         """Exit threshold for a metric, per the hysteresis margin."""
@@ -56,7 +60,9 @@ class StateConfig:
 @dataclass(frozen=True)
 class AudioConfig:
     sink: str | None = None
-    chime_text: str = "fix your posture"
+    # Spoken-prompt wording rendered by TTS (the chime is a synthesized tone;
+    # "chime_text" elsewhere in the UI/API means this spoken wording).
+    voice_text: str = "Please fix your posture"
 
 
 @dataclass(frozen=True)
