@@ -8,6 +8,7 @@ the spec's acceptance criterion.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import NamedTuple
 
 import pytest
@@ -49,6 +50,16 @@ def make_pose(overrides: dict[int, SimpleLandmark] | None = None) -> list[Simple
 
 # Precomputed expected angles (atan2 constants, not computed from the code).
 GOOD_ANGLES = ExpectedAngles(0.0, 0.0, 0.0, 0.0)
+def mirror_x(pose: list[SimpleLandmark]) -> list[SimpleLandmark]:
+    """Reflect a pose across the vertical image centerline (x -> 1 - x).
+
+    Emulates the mirrored / high side-mount framing where MediaPipe's
+    RIGHT_SHOULDER lands left of LEFT_SHOULDER in image coordinates.
+    y values are untouched, so "which shoulder is lower" is preserved.
+    """
+    return [replace(landmark, x=1.0 - landmark.x) for landmark in pose]
+
+
 SLOUCHED_ANGLES = ExpectedAngles(
     head_forward_deg=18.4349488,  # atan2(0.02, 0.06)
     trunk_lean_deg=0.0,
