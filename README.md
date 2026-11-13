@@ -74,10 +74,13 @@ distance — roughly the range 0.6–2.5 m), and the metric tiles.
 
 **Skeleton check:** sit down facing the camera and confirm the skeleton overlay
 tracks you — head, shoulders and torso lines on your body, not drifting or snapping
-to furniture. The placement guide under the video is a live checklist: person fully
-in frame, torso inside the depth band, camera at chest/neck height aimed at
-mid-torso. Sit 1.0–1.5 m from the camera so head and hips are both in frame
-(at close range the vertical field of view cannot cover a seated person).
+to furniture. The placement guide under the video is a live checklist. Primary
+recommendation: mount the camera HIGH — on a shelf or wall mount roughly
+0.4–0.5 m above head height — and tilt it down about 45 degrees at your
+mid-torso. At the normal ~0.6–0.8 m working distance this fits head-to-hips
+inside the D435i's ~42° vertical FOV because the view looks along the body.
+At a real desk a chest-height camera 1.0–1.5 m away is physically awkward
+while typing, so keep that setup only as an alternative for deep desks.
 Fix the camera position until no placement warning shows.
 
 ### 3. Test nudge
