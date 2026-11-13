@@ -113,6 +113,7 @@ the system stays silent.
 | Flickers between GOOD and BAD | `scoring.hysteresis_margin_deg` (higher = stickier) |
 | Nudges before you even settle into the chair | `state.bad_sustain_s` (chime delay), `state.good_confirm_s` |
 | Voice prompts too aggressive | `state.voice_delay_s` (after chime), `state.voice_repeat_cooldown_s` |
+| Positive chime (rewards sustained good posture) | `feedback.positive_chime.enabled` / `feedback.positive_chime.every_seconds` |
 | Person scored too far / too close | `scoring.depth_min_m` / `scoring.depth_max_m` |
 | Video resolution or fps | `camera.*` |
 | Wrong speakers | `audio.sink` (set your sink name from the preflight report) |

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from posture_guard.config import ScoringConfig, StateConfig
+from posture_guard.config import FeedbackConfig, ScoringConfig, StateConfig
 from posture_guard.scoring import (
     ScoringResult,
     Unreliable,
@@ -39,6 +39,7 @@ class Nudge(Enum):
     NONE = "none"
     CHIME = "chime"
     VOICE = "voice"
+    POSITIVE_CHIME = "positive_chime"
 
 
 _ABSENT_REASONS = (UnreliableReason.NO_POSE, UnreliableReason.DEPTH_OUT_OF_BAND)
@@ -71,10 +72,12 @@ class PostureStateMachine:
     def __init__(
         self, timings: StateConfig, thresholds: ScoringConfig, *,
         timings_override: VoiceTimings | None = None,
+        positive_chime: FeedbackConfig | None = None,
     ):
         self._t = timings
         self._th = thresholds
         self._override = timings_override
+        self._positive = positive_chime if positive_chime is not None else FeedbackConfig()
         self._state = PostureState.NO_PERSON
         self._history: list[tuple[float, str]] = []  # (t, zone) samples
         self._bad_since: float | None = None
@@ -82,6 +85,8 @@ class PostureStateMachine:
         self._absent_since: float | None = None
         self._chime_at: float | None = None
         self._voice_at: float | None = None
+        self._good_state_since: float | None = None  # start of the current GOOD episode
+        self._positive_at: float | None = None  # last positive chime (cooldown timer)
 
     @property
     def state(self) -> PostureState:
@@ -114,7 +119,10 @@ class PostureStateMachine:
 
         if self._state in (PostureState.BAD_CHIME, PostureState.BAD_VOICE):
             return self._update_bad(smoothed_good, now)
-        return self._update_idle(smoothed_bad, smoothed_good, now)
+        transition = self._update_idle(smoothed_bad, smoothed_good, now)
+        if self._state is PostureState.GOOD and self._positive.positive_chime.enabled:
+            return self._maybe_positive_chime(now)
+        return transition
 
     # -- unreliable / absent paths -------------------------------------------------
 
@@ -135,6 +143,7 @@ class PostureStateMachine:
         self._good_since = None
         self._chime_at = None
         self._voice_at = None
+        self._good_state_since = None
         return Transition(PostureState.UNRELIABLE, Nudge.NONE)
 
     def _enter_no_person(self) -> None:
@@ -144,6 +153,7 @@ class PostureStateMachine:
         self._good_since = None
         self._chime_at = None
         self._voice_at = None
+        self._good_state_since = None
 
     # -- scored paths ----------------------------------------------------------------
 
@@ -165,6 +175,7 @@ class PostureStateMachine:
             self._state = PostureState.BAD_CHIME
             self._chime_at = now
             self._voice_at = None
+            self._good_state_since = None
             return Transition(PostureState.BAD_CHIME, Nudge.CHIME, seconds_bad)
         if (
             smoothed_good
@@ -200,6 +211,20 @@ class PostureStateMachine:
             self._voice_at = now
             return Transition(PostureState.BAD_VOICE, Nudge.VOICE)
         return Transition(self._state, Nudge.NONE)
+
+    def _maybe_positive_chime(self, now: float) -> Transition:
+        """Positive reinforcement: while state is GOOD, fire the positive chime
+        once per every_seconds of continuously good posture. The timer restarts
+        on fire (cooldown) and on any departure from GOOD (sustained interval)."""
+        if self._good_state_since is None:
+            self._good_state_since = now
+        every_s = self._positive.positive_chime.every_seconds
+        sustained = now - self._good_state_since >= every_s - _EPS
+        cooled = self._positive_at is None or now - self._positive_at >= every_s - _EPS
+        if sustained and cooled:
+            self._positive_at = now
+            return Transition(PostureState.GOOD, Nudge.POSITIVE_CHIME)
+        return Transition(PostureState.GOOD, Nudge.NONE)
 
     def _prune_history(self, now: float) -> None:
         cutoff = now - self._t.smoothing_window_s - _EPS

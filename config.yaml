@@ -39,3 +39,9 @@ audio:
   sink: null
   # Spoken prompt wording (rendered by TTS; editable at runtime on the dashboard).
   voice_text: "Please fix your posture"
+
+feedback:
+  positive_chime:
+    enabled: true        # reward sustained good posture with an upbeat chime
+    every_seconds: 120   # fire at most this often while posture stays GOOD
+
