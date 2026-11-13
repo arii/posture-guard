@@ -14,8 +14,10 @@ cd "$(dirname "$0")"
 
 # --- 1. System packages ------------------------------------------------------
 # pulseaudio-utils provides pactl/paplay (works under PulseAudio and the
-# PipeWire compatibility layer). pico2wave is the preferred TTS engine;
-# espeak-ng is the fallback the audio worker uses when pico2wave is absent.
+# PipeWire compatibility layer). libttspico-utils provides the pico2wave
+# binary (the preferred TTS engine); it lives in Ubuntu's multiverse and
+# Debian's non-free component. espeak-ng is the fallback the audio worker
+# uses when pico2wave is absent.
 if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
 else
@@ -25,13 +27,14 @@ fi
 echo "==> Installing system packages"
 $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
 $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    libpulse0 pulseaudio-utils ffmpeg pico2wave espeak-ng \
+    libpulse0 pulseaudio-utils ffmpeg libttspico-utils espeak-ng \
     || $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     libpulse0 pulseaudio-utils ffmpeg espeak-ng
 
 # --- 2. Python environment ---------------------------------------------------
 echo "==> Creating venv and installing Python dependencies"
 python3 -m venv .venv
+# shellcheck disable=SC1091  # venv activate only exists after setup runs
 . .venv/bin/activate
 pip install --quiet --upgrade pip
 # hardware extra pulls pyrealsense2, mediapipe and opencv-python; dev adds
