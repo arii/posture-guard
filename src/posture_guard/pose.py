@@ -10,6 +10,7 @@ detector instead, which is what makes the no-camera pipeline runnable.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -112,10 +113,17 @@ class MediaPipePoseDetector:
 
 
 def default_detector() -> PoseDetector:
-    """MediaPipe when installed, the synthetic pose otherwise."""
+    """MediaPipe when usable, the synthetic pose otherwise.
+
+    Any failure to build the MediaPipe detector — missing package, or an
+    incompatible version such as mediapipe 1.x without mp.solutions — degrades
+    to the synthetic pose. Surfaced on stderr, never fatal: the dashboard and
+    state machine run on degraded input rather than crashing at startup.
+    """
     try:
         return MediaPipePoseDetector()
-    except ImportError:
+    except Exception as exc:  # noqa: BLE001 — degraded mode is the contract here
+        print(f"MediaPipe pose unavailable ({exc}); using the synthetic pose", file=sys.stderr)
         return SyntheticPoseDetector()
 
 

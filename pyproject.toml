@@ -13,8 +13,9 @@ dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
     # Dashboard is part of the always-on runtime, not a hardware extra.
+    # [standard] pulls the WebSocket libraries (websockets) /ws needs.
     "fastapi>=0.110",
-    "uvicorn>=0.29",
+    "uvicorn[standard]>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,9 @@ dev = [
 # The RealSense and MediaPipe imports are lazy (inside camera.py / pose.py).
 hardware = [
     "pyrealsense2>=2.56",
-    "mediapipe>=0.10",
+    # Pinned to the mp.solutions.pose legacy API the pose worker uses;
+    # mediapipe 1.x removed it.
+    "mediapipe>=0.10,<1.0",
     "opencv-python>=4.8",
 ]
 

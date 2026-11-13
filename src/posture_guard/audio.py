@@ -194,7 +194,15 @@ class AudioWorker:
         if self._sink is not None:
             cmd += ["--sink", self._sink]
         cmd.append(str(path))
-        result = self._runner(cmd)
+        try:
+            result = self._runner(cmd)
+        except OSError as exc:
+            # A missing or unlaunchable player (FileNotFoundError etc.) is the
+            # same class of failure as a non-zero exit: surfaced as status,
+            # never raised out of the worker thread — a dead sink must not
+            # kill nudging.
+            self._error = f"{self._paplay} unavailable: {exc}"
+            return
         if result.returncode != 0:
             # Playback failures are surfaced as status, never raised out of
             # the worker thread — a dead sink must not kill nudging.

@@ -217,6 +217,37 @@ def test_paplay_failure_is_surfaced_as_status_not_exception(tmp_path):
         worker.close()
 
 
+def test_missing_paplay_binary_kills_nothing_and_surfaces_status(tmp_path):
+    """A player binary that cannot be launched at all (FileNotFoundError,
+    e.g. paplay not installed) is surfaced as status and the playback loop
+    keeps running — nudging survives a dead audio environment."""
+
+    class MissingBinaryRunner(FakeRunner):
+        def __call__(self, cmd: list[str]) -> CommandResult:
+            self.calls.append(list(cmd))
+            if cmd[0] == "pactl":
+                return CommandResult(returncode=0, stdout=self.pactl_sinks or "")
+            if cmd[0] == "paplay":
+                raise FileNotFoundError(2, "No such file or directory", cmd[0])
+            return CommandResult(returncode=0)
+
+    runner = MissingBinaryRunner()
+    worker = make_worker(tmp_path, runner)
+    worker.start()
+    try:
+        worker.enqueue(Nudge.CHIME)
+        assert wait_until(lambda: worker.status.error is not None)
+        assert "unavailable" in worker.status.error
+        # The playback loop is still alive: the next item is consumed too.
+        worker.enqueue(Nudge.VOICE)
+        def last_play() -> str:
+            return (runner.play_calls() or [[""]])[-1][-1]
+
+        assert wait_until(lambda: last_play().endswith("voice.wav"))
+    finally:
+        worker.close()
+
+
 def test_test_nudge_forces_chime_then_voice_past_dedupe(tmp_path):
     runner = FakeRunner()
     worker = make_worker(tmp_path, runner)
