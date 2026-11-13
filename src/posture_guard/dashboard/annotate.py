@@ -48,9 +48,12 @@ def draw_overlay(
     landmarks: Sequence[Landmark] | None,
     state_text: str,
     depth_text: str,
+    reason_text: str = "",
 ) -> NDArray[np.uint8]:
     """Annotate a BGR frame in place-free copy: joints + skeleton lines, the
-    state banner and the depth readout. Landmarks are normalized (0..1)."""
+    state banner, the depth readout and — when a frame is unscoreable — the
+    human-readable reason (e.g. which landmarks are not visible).
+    Landmarks are normalized (0..1)."""
     import cv2
 
     out = color.copy()
@@ -76,13 +79,18 @@ def draw_overlay(
             cv2.circle(out, point, 4, _GREEN, -1)
 
     banner = _banner_color(state_text)
-    cv2.rectangle(out, (0, 0), (width, 58), _BANNER_BG, -1)
+    banner_h = 76 if reason_text else 58
+    cv2.rectangle(out, (0, 0), (width, banner_h), _BANNER_BG, -1)
     cv2.putText(
         out, state_text.upper(), (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, banner, 2
     )
     cv2.putText(
         out, depth_text, (12, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (240, 240, 240), 1
     )
+    if reason_text:
+        cv2.putText(
+            out, reason_text, (12, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.45, banner, 1
+        )
     return out
 
 

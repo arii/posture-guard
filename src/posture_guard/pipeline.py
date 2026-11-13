@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 
 from posture_guard.camera import ColorDepth, FrameSource, SourceStatus, usb_bandwidth_warning
 from posture_guard.config import AppConfig, ScoringConfig
-from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot
+from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot, ScoringThresholds
 from posture_guard.pose import PoseDetection, PoseDetector, default_detector, tracked_landmarks
 from posture_guard.scoring import (
     LEFT_EAR,
@@ -49,7 +49,7 @@ class NudgeSink(Protocol):
 
 
 FrameRenderer = Callable[
-    [NDArray, Sequence[Landmark] | None, str, str], bytes
+    [NDArray, Sequence[Landmark] | None, str, str, str], bytes
 ]
 
 
@@ -58,11 +58,14 @@ def default_frame_renderer(
     landmarks: Sequence[Landmark] | None,
     state_text: str,
     depth_text: str,
+    reason_text: str = "",
 ) -> bytes:
     """Skeleton overlay + banner + JPEG encode; OpenCV imported lazily."""
     from posture_guard.dashboard.annotate import draw_overlay, encode_jpeg
 
-    return encode_jpeg(draw_overlay(color, landmarks, state_text, depth_text))
+    return encode_jpeg(
+        draw_overlay(color, landmarks, state_text, depth_text, reason_text)
+    )
 
 
 def low_visibility_warning(
@@ -167,6 +170,14 @@ class PosturePipeline:
         self._detector: PoseDetector = detector if detector is not None else default_detector()
         self._renderer = renderer or default_frame_renderer
         self._state_machine = PostureStateMachine(config.state, config.scoring)
+        self._thresholds = ScoringThresholds(
+            head_forward_deg=config.scoring.head_forward_deg,
+            trunk_lean_deg=config.scoring.trunk_lean_deg,
+            head_tilt_deg=config.scoring.head_tilt_deg,
+            shoulder_level_deg=config.scoring.shoulder_level_deg,
+            hysteresis_margin_deg=config.scoring.hysteresis_margin_deg,
+            visibility_floor=config.scoring.visibility_floor,
+        )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fps = 0.0
@@ -222,12 +233,17 @@ class PosturePipeline:
                 else ()
             ),
             **_audio_fields(self._audio),
+            thresholds=self._thresholds,
+            unreliable_detail=(
+                result.detail if isinstance(result, Unreliable) and result.detail else None
+            ),
         )
         self._hub.publish_metrics(snapshot)
         state_text = state.value.replace("_", " ")
         depth_text = f"depth {depth_m:.1f} m" if depth_m is not None else "depth -"
+        reason_text = result.detail if isinstance(result, Unreliable) else ""
         self._hub.publish_video(
-            self._renderer(frame.color, detection.landmarks, state_text, depth_text)
+            self._renderer(frame.color, detection.landmarks, state_text, depth_text, reason_text)
         )
 
     # -- fps and threaded run ---------------------------------------------------------

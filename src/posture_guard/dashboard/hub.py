@@ -18,6 +18,29 @@ def _round_or_none(value: float | None, digits: int = 2) -> float | None:
 
 
 @dataclass(frozen=True)
+class ScoringThresholds:
+    """Scoring thresholds published alongside the metric values, so the UI
+    renders healthy bands from config instead of hardcoding them."""
+
+    head_forward_deg: float
+    trunk_lean_deg: float
+    head_tilt_deg: float
+    shoulder_level_deg: float
+    hysteresis_margin_deg: float
+    visibility_floor: float
+
+    def to_payload(self) -> dict[str, float]:
+        return {
+            "head_forward_deg": self.head_forward_deg,
+            "trunk_lean_deg": self.trunk_lean_deg,
+            "head_tilt_deg": self.head_tilt_deg,
+            "shoulder_level_deg": self.shoulder_level_deg,
+            "hysteresis_margin_deg": self.hysteresis_margin_deg,
+            "visibility_floor": self.visibility_floor,
+        }
+
+
+@dataclass(frozen=True)
 class MetricsSnapshot:
     """One frame's dashboard state, rendered as the WS /ws JSON schema."""
 
@@ -38,6 +61,8 @@ class MetricsSnapshot:
     audio_error: str | None = None
     warnings: tuple[str, ...] = ()
     landmarks: tuple[tuple[float, float], ...] = field(default=())
+    thresholds: ScoringThresholds | None = None
+    unreliable_detail: str | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -65,6 +90,8 @@ class MetricsSnapshot:
             },
             "warnings": list(self.warnings),
             "landmarks": [[round(x, 4), round(y, 4)] for x, y in self.landmarks],
+            "thresholds": self.thresholds.to_payload() if self.thresholds else None,
+            "unreliable_detail": self.unreliable_detail,
         }
 
 

@@ -6,12 +6,17 @@ Expected values are the precomputed constants in conftest.py.
 
 import pytest
 
-from conftest import GOOD_ANGLES, SLOUCHED_ANGLES
+from conftest import GOOD_ANGLES, SLOUCHED_ANGLES, make_pose
 from posture_guard.config import ScoringConfig
 from posture_guard.scoring import (
+    LEFT_EAR,
+    LEFT_HIP,
+    RIGHT_HIP,
     ScoredPosture,
+    SimpleLandmark,
     Unreliable,
     UnreliableReason,
+    low_visibility_detail,
     measure_head_forward,
     measure_head_tilt,
     measure_shoulder_level,
@@ -104,6 +109,41 @@ class TestScorePoseGates:
 
     def test_low_visibility_never_returns_a_score(self, cropped_pose):
         assert not isinstance(score_pose(cropped_pose, depth_m=1.4, cfg=CFG), ScoredPosture)
+
+    def test_low_visibility_detail_names_failing_landmarks(self, cropped_pose):
+        # Only the right shoulder is below the floor: name it with its value.
+        result = score_pose(cropped_pose, depth_m=1.4, cfg=CFG)
+        assert result.detail == "shoulders not visible (right 0.10)"
+
+    def test_low_visibility_hips_detail_names_trunk_lean(self, good_pose):
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.31),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.28),
+            }
+        )
+        result = score_pose(pose, depth_m=1.4, cfg=CFG)
+        assert result.reason == UnreliableReason.LOW_VISIBILITY
+        assert result.detail == (
+            "hips not visible (left 0.31, right 0.28) - trunk lean unavailable"
+        )
+
+    def test_low_visibility_detail_joins_multiple_groups(self, good_pose):
+        pose = make_pose(
+            {
+                LEFT_EAR: SimpleLandmark(x=0.46, y=0.45, visibility=0.2),
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.31),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.28),
+            }
+        )
+        result = score_pose(pose, depth_m=1.4, cfg=CFG)
+        assert "ears not visible (left 0.20)" in result.detail
+        assert "hips not visible (left 0.31, right 0.28)" in result.detail
+
+    def test_low_visibility_detail_helper_matches_gate(self, good_pose):
+        # All visible: the helper still returns a sane string (no crash), but
+        # score_pose never reaches it.
+        assert isinstance(low_visibility_detail(good_pose, CFG), str)
 
 
 class TestVisibility:

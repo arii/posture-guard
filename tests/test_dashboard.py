@@ -12,7 +12,7 @@ import time
 from fastapi.testclient import TestClient
 
 from posture_guard.dashboard.app import create_app
-from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot
+from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot, ScoringThresholds
 
 
 class RecordingAudio:
@@ -38,6 +38,14 @@ def make_snapshot(**overrides: object) -> MetricsSnapshot:
         "audio_ready": True,
         "warnings": (),
         "landmarks": ((0.4, 0.6), (0.6, 0.6)),
+        "thresholds": ScoringThresholds(
+            head_forward_deg=12.0,
+            trunk_lean_deg=10.0,
+            head_tilt_deg=12.0,
+            shoulder_level_deg=6.0,
+            hysteresis_margin_deg=3.0,
+            visibility_floor=0.5,
+        ),
     }
     defaults.update(overrides)
     return MetricsSnapshot(**defaults)  # type: ignore[arg-type]
@@ -86,6 +94,16 @@ def test_ws_pushes_metrics_json_schema() -> None:
         "head_tilt_deg",
         "shoulder_level_deg",
     }
+    # Scoring thresholds ride alongside the values so the UI never hardcodes
+    # them (spec: healthy bands render from config).
+    assert payload["thresholds"] == {
+        "head_forward_deg": 12.0,
+        "trunk_lean_deg": 10.0,
+        "head_tilt_deg": 12.0,
+        "shoulder_level_deg": 6.0,
+        "hysteresis_margin_deg": 3.0,
+        "visibility_floor": 0.5,
+    }
     assert payload["camera"] == {
         "connected": True,
         "usb_type": None,
@@ -106,6 +124,18 @@ def test_ws_pushes_each_new_snapshot() -> None:
         assert ws.receive_json()["state"] == "no_person"
         hub.publish_metrics(make_snapshot(state="bad_chime"))
         assert ws.receive_json()["state"] == "bad_chime"
+
+
+def test_ws_unreliable_detail_rides_the_payload() -> None:
+    hub = DashboardHub()
+    detail = "hips not visible (left 0.31, right 0.28) - trunk lean unavailable"
+    hub.publish_metrics(make_snapshot(state="unreliable", unreliable_detail=detail))
+    client = TestClient(create_app(hub, RecordingAudio()))
+
+    with client.websocket_connect("/ws") as ws:
+        payload = ws.receive_json()
+
+    assert payload["unreliable_detail"] == detail
 
 
 def test_index_serves_placement_guide_diagrams() -> None:
@@ -158,3 +188,20 @@ def test_index_page_is_served() -> None:
     # tiles, state badge and the test-nudge button.
     for fragment in ("<canvas", "/ws", "/video.mjpg", "/nudge/test", "badge"):
         assert fragment in response.text
+
+
+def test_index_has_band_labels_and_unreliable_detail_targets() -> None:
+    """Every metric tile carries a healthy-band element and the status row
+    carries the unreliable-reason target — both filled from the WS payload."""
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    for key in ("head_forward_deg", "trunk_lean_deg", "head_tilt_deg", "shoulder_level_deg"):
+        assert f'id="b-{key}"' in page  # band label target per metric tile
+    assert 'id="unreliable-detail"' in page
+    # Band text is composed from the server thresholds, not hardcoded.
+    assert "good within" in page
+    assert "payload.thresholds" in page

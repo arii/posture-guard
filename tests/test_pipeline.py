@@ -16,7 +16,7 @@ import pytest
 from conftest import make_pose
 from posture_guard.camera import ColorDepth, SourceStatus, SyntheticFrameSource
 from posture_guard.config import AppConfig, ScoringConfig
-from posture_guard.dashboard.hub import DashboardHub
+from posture_guard.dashboard.hub import DashboardHub, ScoringThresholds
 from posture_guard.pipeline import PosturePipeline, placement_warnings
 from posture_guard.pose import PoseDetection, SyntheticPoseDetector, center_depth_m
 from posture_guard.scoring import (
@@ -44,9 +44,10 @@ class RecordingAudio:
 
 
 def fake_jpeg(
-    color: np.ndarray, landmarks: object, state_text: str, depth_text: str
+    color: np.ndarray, landmarks: object, state_text: str, depth_text: str,
+    reason_text: str = "",
 ) -> bytes:
-    return f"{state_text}|{depth_text}".encode()
+    return f"{state_text}|{depth_text}|{reason_text}".encode()
 
 
 class MutableDetector:
@@ -104,6 +105,17 @@ def test_good_pose_reaches_good_state_with_zeroed_metrics() -> None:
     assert len(snapshot.landmarks) == 6
     assert snapshot.warnings == ()
     assert snapshot.camera_connected is True
+    # Config thresholds ride on every snapshot; the UI renders bands from them.
+    scoring = pipeline._config.scoring
+    assert snapshot.thresholds == ScoringThresholds(
+        head_forward_deg=scoring.head_forward_deg,
+        trunk_lean_deg=scoring.trunk_lean_deg,
+        head_tilt_deg=scoring.head_tilt_deg,
+        shoulder_level_deg=scoring.shoulder_level_deg,
+        hysteresis_margin_deg=scoring.hysteresis_margin_deg,
+        visibility_floor=scoring.visibility_floor,
+    )
+    assert snapshot.unreliable_detail is None
 
 
 def test_full_nudge_timeline_chime_then_voice_then_recovery() -> None:
@@ -160,6 +172,9 @@ def test_cropped_person_surfaces_low_visibility_warning() -> None:
     assert snapshot.warnings == (
         "shoulders not visible - sit facing the camera, 1.0-1.5 m away",
     )
+    # Landmark-level reliability detail: which tracked landmark failed and by
+    # how much, consumed by the dashboard overlay and status row.
+    assert snapshot.unreliable_detail == "shoulders not visible (right 0.10)"
     # Hips out of frame is the close-range geometry failure: name the lost
     # metric and the fix (move back), matching the runbook guidance.
     from posture_guard.pipeline import low_visibility_warning

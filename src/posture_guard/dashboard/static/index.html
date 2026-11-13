@@ -54,6 +54,8 @@
   .tile .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   .tile .value { font-size: 26px; font-weight: 600; }
   .tile .value.bad { color: var(--warn); }
+  .tile .value.good { color: var(--good); }
+  .tile .band { font-size: 11px; color: var(--muted); margin-top: 2px; min-height: 14px; }
   .status-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; }
   .status-row .stat b { font-weight: 600; }
   #warnings:empty { display: none; }
@@ -61,7 +63,7 @@
     border: 1px solid var(--warn); color: var(--warn); border-radius: 6px;
     padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
   }
-  #camera-detail { color: var(--warn); }
+  #camera-detail, #unreliable-detail { color: var(--warn); }
   #camera-detail:empty { display: none; }
   details.guide-details { margin-top: 10px; }
   details.guide-details summary {
@@ -99,14 +101,15 @@
     <div class="panel">
       <h2>Posture metrics</h2>
       <div class="tiles">
-        <div class="tile"><div class="label">Head forward</div><div class="value" id="m-head_forward_deg">-</div></div>
-        <div class="tile"><div class="label">Trunk lean</div><div class="value" id="m-trunk_lean_deg">-</div></div>
-        <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div></div>
-        <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div></div>
+        <div class="tile"><div class="label">Head forward</div><div class="value" id="m-head_forward_deg">-</div><div class="band" id="b-head_forward_deg"></div></div>
+        <div class="tile"><div class="label">Trunk lean</div><div class="value" id="m-trunk_lean_deg">-</div><div class="band" id="b-trunk_lean_deg"></div></div>
+        <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div><div class="band" id="b-head_tilt_deg"></div></div>
+        <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div><div class="band" id="b-shoulder_level_deg"></div></div>
       </div>
       <div class="status-row">
         <span class="stat">camera <b id="camera">-</b><span id="camera-detail" class="stat"></span></span>
         <span class="stat">audio <b id="audio">-</b></span>
+        <span id="unreliable-detail" class="stat"></span>
       </div>
     </div>
     <div class="panel" style="margin-top: 16px">
@@ -206,11 +209,19 @@ const badge = document.getElementById("state-badge");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const last = { landmarks: null };
+let thresholds = null; // scoring thresholds from the server, never hardcoded
 
 function metric(id, value) {
   const el = document.getElementById("m-" + id);
+  const limit = thresholds ? thresholds[id] : undefined;
   el.textContent = value === null ? "-" : value.toFixed(0) + "\u00B0";
-  el.classList.toggle("bad", value !== null && Math.abs(value) >= 6);
+  // Outside the healthy band is amber; inside is green. Without thresholds
+  // (not yet received) the value stays neutral.
+  const outside = value !== null && limit !== undefined && Math.abs(value) >= limit;
+  el.classList.toggle("bad", outside);
+  el.classList.toggle("good", value !== null && limit !== undefined && !outside);
+  document.getElementById("b-" + id).textContent =
+    limit === undefined ? "" : "good within \u00B1" + limit + "\u00B0";
 }
 
 function drawSkeleton() {
@@ -237,7 +248,10 @@ function apply(payload) {
   document.getElementById("fps").textContent = payload.fps;
   document.getElementById("depth").textContent =
     payload.depth_m === null ? "-" : payload.depth_m.toFixed(1) + " m";
+  thresholds = payload.thresholds || null;
   Object.entries(payload.metrics).forEach(([k, v]) => metric(k, v));
+  document.getElementById("unreliable-detail").textContent =
+    payload.unreliable_detail ? "\u00B7 " + payload.unreliable_detail : "";
   const warnings = document.getElementById("warnings");
   warnings.textContent = payload.warnings.join(" \u00B7 ");
   const cam = payload.camera;
