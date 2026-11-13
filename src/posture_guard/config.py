@@ -60,6 +60,12 @@ class ScoringConfig:
     # set false to score ears/shoulders only (trunk lean drops out of the BAD
     # decision and reports unavailable) so head-forward reminders still fire.
     trunk_lean_required: bool = True
+    # Degraded feedback: when trunk lean is required but only the hips fall
+    # below the visibility floor, still score the ears/shoulders metrics (head
+    # forward, head tilt, shoulder level) and report trunk lean as unavailable,
+    # instead of gating all feedback. Ears or shoulders below the floor always
+    # gates — they are the minimum usable set.
+    degraded_feedback: bool = True
 
     def bad_exit(self, enter_threshold: float) -> float:
         """Exit threshold for a metric, per the hysteresis margin."""

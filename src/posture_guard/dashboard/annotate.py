@@ -78,6 +78,13 @@ def draw_overlay(
         for point in points.values():
             cv2.circle(out, point, 4, _GREEN, -1)
 
+    if state_text == "unreliable":
+        # Demoted (demo feedback): in the high-mount framing this state is
+        # near-permanent, and the big red banner obscured the live video.
+        # The header badge pill and the reliability line below the metrics
+        # carry the status and the missing-landmark reason instead.
+        return out
+
     banner = _banner_color(state_text)
     banner_h = 76 if reason_text else 58
     cv2.rectangle(out, (0, 0), (width, banner_h), _BANNER_BG, -1)

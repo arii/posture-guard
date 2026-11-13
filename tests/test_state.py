@@ -26,7 +26,9 @@ from posture_guard.config import (
 from posture_guard.feedback import RuntimeFeedback
 from posture_guard.scoring import (
     LEFT_EAR,
+    LEFT_HIP,
     RIGHT_EAR,
+    RIGHT_HIP,
     RIGHT_SHOULDER,
     ScoredPosture,
     SimpleLandmark,
@@ -322,11 +324,21 @@ class TestUnreliableAndAbsent:
         assert any(tr.state is PostureState.NO_PERSON for tr in transitions)
         assert all(tr.nudge is not Nudge.VOICE for tr in transitions)
 
-    def test_out_of_band_depth_feeds_no_person_timer(self):
+    def test_no_pose_feeds_no_person_timer(self):
+        """NO_PERSON requires no pose detected, sustained."""
+        sm = PostureStateMachine(TIMINGS, CFG)
+        run(sm, grid(0.0, 5.0, 0.1, GOOD))
+        transitions = run(sm, grid(5.1, 8.0, 0.1, NO_POSE))
+        assert transitions[-1].state is PostureState.NO_PERSON
+
+    def test_out_of_band_depth_with_tracked_pose_is_unreliable_not_absent(self):
+        """Regression (NO PERSON flap): the pose is detected, so an out-of-band
+        center-box depth reading (background in high-mount framing) is an
+        unscoreable frame — it must never feed the no-person timer."""
         sm = PostureStateMachine(TIMINGS, CFG)
         run(sm, grid(0.0, 5.0, 0.1, GOOD))
         transitions = run(sm, grid(5.1, 8.0, 0.1, TOO_FAR))
-        assert transitions[-1].state is PostureState.NO_PERSON
+        assert {t.state for t in transitions} == {PostureState.UNRELIABLE}
 
     def test_person_returning_from_no_person_gets_good_confirmation(self):
         sm = PostureStateMachine(TIMINGS, CFG)
@@ -402,13 +414,196 @@ class TestBaselineDeviation:
         """NO_PERSON resets the baseline so a new sitting context (or person)
         calibrates from its own first scored frame, not the old neutral."""
         machine = PostureStateMachine(TIMINGS, CFG)
-        run(machine, grid(0.0, 30.0, 0.1, _scored(-2.0)))
-        # Leave the depth band long enough to enter NO_PERSON.
-        run(machine, grid(30.0, 32.5, 0.1, TOO_FAR))
+        run(machine, grid(0.0, 30.0, 0.1, _scored(-4.0)))
+        assert machine.state is PostureState.GOOD
+        # Lose the pose long enough to enter NO_PERSON (absence now means no
+        # pose detected — an out-of-band depth reading with a tracked pose is
+        # UNRELIABLE, never absent).
+        run(machine, grid(30.0, 32.5, 0.1, NO_POSE))
         assert machine.state is PostureState.NO_PERSON
 
-        # A different neutral at +7 deg from the first scored frame: with the
-        # fresh baseline anchored there, no deviation breach is possible.
-        transitions = run(machine, grid(32.5, 36.0, 0.1, _scored(7.0)))
+        # Return at +4.9 deg: raw-good (below the 5 deg exit threshold), but
+        # 8.9 deg from the old -4 deg baseline — it would breach deviation if
+        # the stale baseline survived the absence. With the reset, the fresh
+        # baseline anchors at +4.9 deg and the person sits in GOOD.
+        transitions = run(machine, grid(32.5, 36.0, 0.1, _scored(4.9)))
         assert all(t.nudge is Nudge.NONE for t in transitions)
         assert machine.state is PostureState.GOOD
+
+
+class TestSustainHysteresis:
+    """Hysteresis applies to the sustain streak itself: once a bad streak is
+    counting, neutral-band frames (between threshold - margin and threshold)
+    must not reset it — only falling below threshold - margin does. Regression
+    for boundary-hover chatter: a live instance wavering 11.5-12.4 deg against
+    a 12.0 threshold never accumulated a 2 s bad streak, so feedback never
+    fired even though posture sat at the threshold."""
+
+    BOUNDARY_CFG = ScoringConfig(head_forward_deg=12.0, hysteresis_margin_deg=3.0)
+
+    def _machine(self) -> PostureStateMachine:
+        return PostureStateMachine(TIMINGS, self.BOUNDARY_CFG)
+
+    @staticmethod
+    def _chime_times(samples, transitions):  # noqa: ANN001
+        return [
+            now
+            for (now, _), t in zip(samples, transitions, strict=False)
+            if t.nudge is Nudge.CHIME
+        ]
+
+    def test_wavering_boundary_posture_accumulates_a_chime(self):
+        """30 frames bad (12.2-12.4), 30 neutral (11.5-11.9), repeating: the
+        streak must survive the neutral dips and chime after bad_sustain_s."""
+        machine = self._machine()
+        samples: list[tuple[float, object]] = []
+        now = 0.0
+        while now <= 4.0 + 1e-9:
+            angle = 12.3 if (round(now * 10) % 6) < 3 else 11.7
+            samples.append((round(now, 3), _scored(angle)))
+            now += 0.1
+        transitions = run(machine, samples)
+
+        chimes = self._chime_times(samples, transitions)
+        assert chimes == [pytest.approx(2.0)]  # first bad frame at t=0 + 2 s
+
+    def test_sustained_below_exit_threshold_resets_the_streak(self):
+        """Falling below threshold - margin (12 - 3 = 9) resets the counting
+        streak: wavering afterwards needs a full bad_sustain_s again, it does
+        not chime off the time already accumulated before the reset."""
+        machine = self._machine()
+
+        def wavering(t: float) -> ScoredPosture:
+            return _scored(12.3 if (round(t * 10) % 6) < 3 else 11.7)
+
+        # 1 s of boundary wavering starts a streak; 1 s clearly good (8 deg,
+        # below the 9 deg exit threshold) resets it.
+        run(machine, [(round(i * 0.1, 3), wavering(i * 0.1)) for i in range(10)])
+        run(machine, grid(1.0, 2.0, 0.1, _scored(8.0)))
+
+        # Wavering resumes at 2.0; the good frames age out of the 0.3 s window
+        # by ~2.3, so the chime lands a full 2 s after the streak restarts.
+        samples = [(round(2.0 + i * 0.1, 3), wavering(2.0 + i * 0.1)) for i in range(26)]
+        transitions = run(machine, samples)
+
+        chimes = self._chime_times(samples, transitions)
+        # The essential property: a full fresh bad_sustain_s elapses after the
+        # reset before the chime. Given the wavering pattern's phase after the
+        # good frames age out (~2.4), the streak restarts at the first bad
+        # frame (2.4) and chimes at 4.4 — definitely not off the pre-reset
+        # clock, which would have chimed by ~3.2.
+        assert len(chimes) == 1
+        assert chimes[0] >= 4.0
+
+    def test_clearly_good_posture_keeps_existing_sustain_behavior(self):
+        """Clearly good posture (below the exit threshold) behaves exactly as
+        before: GOOD confirmation, no nudges, and a constant breach after a
+        clearly-good stretch chimes at bad_sustain_s on the dot."""
+        machine = self._machine()
+        run(machine, grid(0.0, 10.0, 0.1, _scored(8.0)))
+        assert machine.state is PostureState.GOOD
+        assert machine._bad_since is None  # no streak ever started
+
+        samples = grid(10.0, 12.5, 0.1, _scored(12.3))
+        transitions = run(machine, samples)
+        # First bad frame at 10.0; the good frames before it age out of the
+        # 0.3 s smoothing window by ~10.1, so the streak counts from 10.1 and
+        # the chime lands at 12.1 — the same start-delay the pre-hysteresis
+        # streak had (it also counted only once the window was breach-free).
+        assert self._chime_times(samples, transitions) == [pytest.approx(12.1)]
+
+
+class TestNoPersonFlap:
+    """Regression: NO PERSON must require no pose detected. A person whose
+    depth reading fails the band or whose landmarks fall below the visibility
+    floor is present but unscoreable (UNRELIABLE) — never absent. The field
+    flap showed the header on NO PERSON for seconds while the wireframe
+    rendered and the metrics displayed the last in-band reading (high-mount
+    framing puts the center-box depth on desk/wall background)."""
+
+    LOWVIS = score_pose(
+        make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.2),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.2),
+            }
+        ),
+        0.9,
+        ScoringConfig(degraded_feedback=False),
+    )
+
+    def test_tracked_pose_with_out_of_band_depth_never_reaches_no_person(self):
+        machine = PostureStateMachine(TIMINGS, CFG)
+        oob = Unreliable(
+            UnreliableReason.DEPTH_OUT_OF_BAND, "depth 3.00 m outside 0.6-2.5 m"
+        )
+        transitions = run(machine, grid(0.0, 6.0, 0.1, oob))
+        states = {t.state for t in transitions}
+        assert states == {PostureState.UNRELIABLE}
+
+    def test_low_visibility_with_in_band_depth_never_reaches_no_person(self):
+        """Healthy pose, in-band depth (0.9 m), hips below the visibility
+        floor: UNRELIABLE, not NO PERSON."""
+        assert isinstance(self.LOWVIS, Unreliable)  # gated before the machine
+        machine = PostureStateMachine(TIMINGS, CFG)
+        transitions = run(machine, grid(0.0, 6.0, 0.1, self.LOWVIS))
+        states = {t.state for t in transitions}
+        assert states == {PostureState.UNRELIABLE}
+
+
+class TestDegradedFeedbackFiring:
+    """With degraded feedback, partial tracking (ears+shoulders ok, hips
+    below the floor) still reaches BAD and fires reminders; ears below the
+    floor gates; the flag off restores the old silent gating."""
+
+    def _machine(self, cfg: ScoringConfig) -> PostureStateMachine:
+        return PostureStateMachine(TIMINGS, cfg)
+
+    def _slouched_hips_hidden(self) -> ScoredPosture:
+        """Degraded-mode score: hips hidden, head slouched forward 18.4 deg."""
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.2),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.2),
+                LEFT_EAR: SimpleLandmark(x=0.48, y=0.54),
+                RIGHT_EAR: SimpleLandmark(x=0.56, y=0.54),
+            }
+        )
+        result = score_pose(pose, 0.9, CFG)
+        assert isinstance(result, ScoredPosture)
+        assert result.trunk_lean_available is False
+        return result
+
+    def test_partial_visibility_reaches_bad_and_fires_a_chime(self):
+        machine = self._machine(CFG)
+        transitions = run(machine, grid(0.0, 4.0, 0.1, self._slouched_hips_hidden()))
+        chimes = [t for t in transitions if t.nudge is Nudge.CHIME]
+        assert chimes and chimes[0].state is PostureState.BAD_CHIME
+
+    def test_ears_below_floor_gates_all_feedback(self):
+        pose = make_pose(
+            {LEFT_EAR: SimpleLandmark(x=0.46, y=0.45, visibility=0.2)}
+        )
+        gated = score_pose(pose, 0.9, CFG)
+        assert isinstance(gated, Unreliable)
+        machine = self._machine(CFG)
+        transitions = run(machine, grid(0.0, 4.0, 0.1, gated))
+        assert all(t.nudge is Nudge.NONE for t in transitions)
+        assert machine.state is PostureState.UNRELIABLE
+
+    def test_flag_off_restores_silent_gating(self):
+        cfg = ScoringConfig(degraded_feedback=False)
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.2),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.2),
+                LEFT_EAR: SimpleLandmark(x=0.48, y=0.54),
+                RIGHT_EAR: SimpleLandmark(x=0.56, y=0.54),
+            }
+        )
+        gated = score_pose(pose, 0.9, cfg)
+        assert isinstance(gated, Unreliable)
+        machine = self._machine(cfg)
+        transitions = run(machine, grid(0.0, 4.0, 0.1, gated))
+        assert all(t.nudge is Nudge.NONE for t in transitions)
+        assert machine.state is PostureState.UNRELIABLE

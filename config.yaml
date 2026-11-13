@@ -29,6 +29,11 @@ scoring:
   # trunk lean then reports "unavailable" and drops out of the BAD decision,
   # but head-forward / head-tilt / shoulder-level reminders still fire.
   trunk_lean_required: true
+  # Degraded feedback: when only the hips fall below the visibility floor,
+  # still score head-forward / head-tilt / shoulder-level (trunk lean reports
+  # unavailable and drops out of the BAD decision) instead of gating all
+  # feedback. Ears or shoulders below the floor always gate.
+  degraded_feedback: true
   # Depth gate: person must sit inside this band (meters) to be scored.
   depth_min_m: 0.6
   depth_max_m: 2.5
