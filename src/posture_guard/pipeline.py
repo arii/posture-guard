@@ -132,6 +132,18 @@ def placement_warnings(
     return tuple(warnings)
 
 
+def _hips_below_floor(
+    landmarks: Sequence[Landmark] | None, cfg: ScoringConfig
+) -> bool:
+    """True when either hip landmark sits below the visibility floor."""
+    if landmarks is None:
+        return False
+    return any(
+        landmarks[i].visibility < cfg.visibility_floor
+        for i in (LEFT_HIP, RIGHT_HIP)
+    )
+
+
 def _audio_fields(audio: NudgeSink | None) -> dict[str, object]:
     """AudioWorker.status fields for the snapshot; stubs without a status
     property report the audio worker as not ready."""
@@ -207,18 +219,36 @@ class PosturePipeline:
             allowed = self._feedback is None or self._feedback.allows(transition.nudge)
             if allowed and self._audio is not None:
                 self._audio.enqueue(transition.nudge)
-            self._nudge_seq += 1
-            self._nudge_event = {
-                "kind": transition.nudge.value,
-                "seq": self._nudge_seq,
-                "muted": not allowed,  # dropped by mode: still a visible event
-            }
+            self._nudge_event = self._emit_nudge_event(transition.nudge, allowed)
         self._update_fps(frame.timestamp_s)
         if self._hub is not None:
             self._publish(detection, result, transition.state, frame)
         return transition
 
     # -- dashboard publication -----------------------------------------------------
+
+    def _emit_nudge_event(self, nudge: Nudge, allowed: bool) -> dict[str, object]:
+        """Build the visible reminder event. Voice events carry the prompt text
+        so the banner can read 'Reminder: <text>'; sequence numbers come from
+        the hub when wired so snapshot and test-endpoint events never collide."""
+        text = (
+            self._feedback.prompt_text()
+            if nudge is Nudge.VOICE and self._feedback is not None
+            else None
+        )
+        if self._hub is not None:
+            return self._hub.next_nudge_event(
+                nudge.value, muted=not allowed, text=text
+            )
+        self._nudge_seq += 1
+        event: dict[str, object] = {
+            "kind": nudge.value,
+            "seq": self._nudge_seq,
+            "muted": not allowed,  # dropped by mode: still a visible event
+        }
+        if text:
+            event["text"] = text
+        return event
 
     def _publish(
         self,
@@ -228,6 +258,17 @@ class PosturePipeline:
         frame: ColorDepth,
     ) -> None:
         angles: ScoredPosture | None = result if isinstance(result, ScoredPosture) else None
+        trunk_deg = angles.trunk_lean_deg if angles else None
+        trunk_note: str | None = None
+        if (
+            angles is not None
+            and not self._config.scoring.trunk_lean_required
+            and _hips_below_floor(detection.landmarks, self._config.scoring)
+        ):
+            # Trunk lean optional + hips invisible: the measured angle is
+            # garbage, so report it as unavailable instead of a number.
+            trunk_deg = None
+            trunk_note = "\u2014 trunk lean unavailable (hips not visible)"
         camera = self._source.status
         depth_m = detection.depth_m
         snapshot = MetricsSnapshot(
@@ -235,7 +276,7 @@ class PosturePipeline:
             fps=self._fps,
             depth_m=depth_m,
             head_forward_deg=angles.head_forward_deg if angles else None,
-            trunk_lean_deg=angles.trunk_lean_deg if angles else None,
+            trunk_lean_deg=trunk_deg,
             head_tilt_deg=angles.head_tilt_deg if angles else None,
             shoulder_level_deg=angles.shoulder_level_deg if angles else None,
             camera_connected=camera.connected,
@@ -255,6 +296,7 @@ class PosturePipeline:
             unreliable_detail=(
                 result.detail if isinstance(result, Unreliable) and result.detail else None
             ),
+            trunk_note=trunk_note,
             feedback=(
                 self._feedback.to_payload()
                 if self._feedback is not None

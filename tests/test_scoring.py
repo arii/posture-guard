@@ -37,6 +37,49 @@ CFG = ScoringConfig()
 SLOUCHED_EXPECTED = 18.4349488  # atan2(0.02, 0.06), see conftest slouched_pose
 
 
+class TestTrunkLeanOptional:
+    """scoring.trunk_lean_required: false — hips may fall below the visibility
+    floor (high-mount framing); the remaining metrics still score and reach BAD."""
+
+    def test_hidden_hips_still_score_with_flag_false(self):
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.3),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.3),
+            }
+        )
+        cfg = ScoringConfig(trunk_lean_required=False)
+        result = score_pose(pose, 1.4, cfg)
+        assert isinstance(result, ScoredPosture)  # not UNRELIABLE low_visibility
+
+    def test_hidden_hips_block_scoring_when_flag_defaults_true(self):
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.3),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.3),
+            }
+        )
+        result = score_pose(pose, 1.4, ScoringConfig())
+        assert result == Unreliable(
+            UnreliableReason.LOW_VISIBILITY,
+            "hips not visible (left 0.30, right 0.30) - trunk lean unavailable",
+        )
+
+    def test_trunk_lean_excluded_from_bad_decision_when_optional(self):
+        """A garbage trunk angle cannot make the zone BAD on its own; ears and
+        shoulders still can."""
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.10, y=0.10, visibility=0.3),
+                RIGHT_HIP: SimpleLandmark(x=0.90, y=0.10, visibility=0.3),
+            }
+        )
+        cfg = ScoringConfig(trunk_lean_required=False)
+        scored = score_pose(pose, 1.4, cfg)
+        assert isinstance(scored, ScoredPosture)
+        assert zone_of(scored, cfg) == "good"  # trunk lean ignored entirely
+
+
 def assert_matches(scored: ScoredPosture, expected) -> None:  # noqa: ANN001 - conftest NamedTuple
     assert scored.head_forward_deg == pytest.approx(
         expected.head_forward_deg, abs=ANGLE_TOLERANCE_DEG

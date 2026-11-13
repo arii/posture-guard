@@ -18,7 +18,7 @@ from posture_guard.state import Nudge
 def test_from_config_seeds_from_config_defaults() -> None:
     config = AppConfig(
         state=StateConfig(voice_delay_s=5.0, voice_repeat_cooldown_s=17.0),
-        audio=AudioConfig(chime_text="sit up"),
+        audio=AudioConfig(voice_text="sit up"),
     )
 
     feedback = RuntimeFeedback.from_config(config)

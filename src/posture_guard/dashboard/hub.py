@@ -63,6 +63,7 @@ class MetricsSnapshot:
     landmarks: tuple[tuple[float, float], ...] = field(default=())
     thresholds: ScoringThresholds | None = None
     unreliable_detail: str | None = None
+    trunk_note: str | None = None  # set when trunk lean is measured as unavailable
     feedback: dict[str, object] | None = None  # RuntimeFeedback.to_payload()
     nudge_event: dict[str, object] | None = None  # {"kind": "chime"|"voice", "seq": n}
 
@@ -94,6 +95,7 @@ class MetricsSnapshot:
             "landmarks": [[round(x, 4), round(y, 4)] for x, y in self.landmarks],
             "thresholds": self.thresholds.to_payload() if self.thresholds else None,
             "unreliable_detail": self.unreliable_detail,
+            "trunk_note": self.trunk_note,
             "feedback": self.feedback,
             "nudge_event": self.nudge_event,
         }
@@ -114,6 +116,9 @@ class DashboardHub:
         self._metrics: MetricsSnapshot | None = None
         self._metrics_seq = 0
         self._clients: set[object] = set()
+        self._nudge_seq = 0  # one counter for every reminder event source
+        self._direct_event: dict[str, object] | None = None  # latest test-endpoint event
+        self._direct_seq = -1
 
     # -- published values -------------------------------------------------------------
 
@@ -139,6 +144,40 @@ class DashboardHub:
             if self._metrics is None:
                 return None
             return self._metrics, self._metrics_seq
+
+    # -- reminder events ----------------------------------------------------------------
+    # Sequence numbers come from one hub-side counter so state-machine nudges
+    # (carried on the metrics snapshot) and test-button nudges (published here)
+    # can never collide in the UI's last-seen-seq dedupe.
+
+    def next_nudge_event(
+        self, kind: str, *, muted: bool = False, text: str | None = None
+    ) -> dict[str, object]:
+        """Allocate the next event (pipeline path: it rides the snapshot)."""
+        with self._lock:
+            self._nudge_seq += 1
+            event: dict[str, object] = {"kind": kind, "seq": self._nudge_seq, "muted": muted}
+            if text:
+                event["text"] = text
+            return event
+
+    def publish_nudge_event(self, kind: str, *, text: str | None = None) -> dict[str, object]:
+        """Allocate and remember an event for the WS loop to push directly —
+        the test endpoints have no snapshot to ride."""
+        with self._lock:
+            self._nudge_seq += 1
+            event: dict[str, object] = {"kind": kind, "seq": self._nudge_seq}
+            if text:
+                event["text"] = text
+            self._direct_event = event
+            self._direct_seq = self._nudge_seq
+            return event
+
+    def latest_direct_event(self) -> tuple[dict[str, object], int] | None:
+        with self._lock:
+            if self._direct_event is None:
+                return None
+            return self._direct_event, self._direct_seq
 
     # -- websocket clients -------------------------------------------------------------
 

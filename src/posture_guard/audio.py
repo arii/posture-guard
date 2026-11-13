@@ -10,6 +10,7 @@ injected runner, so tests stub the subprocess layer entirely.
 
 from __future__ import annotations
 
+import logging
 import math
 import queue
 import shutil
@@ -26,6 +27,8 @@ from posture_guard.config import AudioConfig
 from posture_guard.state import Nudge
 
 SAMPLE_RATE = 44100
+
+logger = logging.getLogger(__name__)
 
 Runner = Callable[[Sequence[str]], "CommandResult"]
 Which = Callable[[str], str | None]
@@ -191,7 +194,7 @@ class AudioWorker:
         _render_chime(chime_path)
         self._sounds[Nudge.CHIME] = chime_path
         voice_path = self._sound_dir / "voice.wav"
-        backend = self._render_voice(self._config.chime_text, voice_path)
+        backend = self._render_voice(self._config.voice_text, voice_path)
         if backend is not None:
             self._sounds[Nudge.VOICE] = voice_path
             self._tts_backend = backend
@@ -238,23 +241,37 @@ class AudioWorker:
                     self._pending.discard(nudge)
 
     def _play(self, path: Path) -> None:
-        cmd = [self._paplay]
-        if self._sink is not None:
-            cmd += ["--sink", self._sink]
-        cmd.append(str(path))
-        try:
-            result = self._runner(cmd)
-        except OSError as exc:
-            # A missing or unlaunchable player (FileNotFoundError etc.) is the
-            # same class of failure as a non-zero exit: surfaced as status,
-            # never raised out of the worker thread — a dead sink must not
-            # kill nudging.
-            self._error = f"{self._paplay} unavailable: {exc}"
-            return
-        if result.returncode != 0:
-            # Playback failures are surfaced as status, never raised out of
-            # the worker thread — a dead sink must not kill nudging.
-            self._error = f"{self._paplay} exited {result.returncode} for {path.name}"
+        """Play on the configured sink; on a non-zero exit, retry once with the
+        paplay default sink before surfacing both attempts as status error."""
+        sinks: tuple[str | None, ...] = (
+            (self._sink, None) if self._sink is not None else (None,)
+        )
+        failures: list[str] = []
+        for sink in sinks:
+            cmd = [self._paplay]
+            if sink is not None:
+                cmd += ["--sink", sink]
+            cmd.append(str(path))
+            try:
+                result = self._runner(cmd)
+            except OSError as exc:
+                # A missing or unlaunchable player (FileNotFoundError etc.) is
+                # surfaced as status, never raised out of the worker thread —
+                # a dead sink must not kill nudging.
+                self._error = f"{self._paplay} unavailable: {exc}"
+                return
+            if result.returncode == 0:
+                self._error = None  # a successful play supersedes a stale error
+                logger.info("played %s on sink %s", path.name, sink or "default")
+                return
+            failures.append(f"sink {sink or 'default'}: exited {result.returncode}")
+            logger.warning(
+                "paplay failed for %s on %s (exit %d)",
+                path.name,
+                sink or "default",
+                result.returncode,
+            )
+        self._error = f"{self._paplay} failed for {path.name}: " + "; ".join(failures)
 
     @staticmethod
     def _run_subprocess(cmd: Sequence[str]) -> CommandResult:

@@ -177,10 +177,17 @@ def valid_depth_median(samples: Sequence[float]) -> float | None:
     return (valid[n // 2 - 1] + valid[n // 2]) / 2
 
 
+def _tracked_indices(cfg: ScoringConfig) -> tuple[int, ...]:
+    """Landmarks the visibility gate requires. Hips drop out when trunk lean is
+    optional (scoring.trunk_lean_required: false) so the high-mount framing —
+    where hips can never clear the floor — still scores ears and shoulders."""
+    base = (LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER)
+    return base if not cfg.trunk_lean_required else base + (LEFT_HIP, RIGHT_HIP)
+
+
 def visibility_ok(landmarks: Sequence[Landmark], cfg: ScoringConfig) -> bool:
     """True when every tracked landmark clears the visibility floor."""
-    tracked = (LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
-    return all(landmarks[i].visibility >= cfg.visibility_floor for i in tracked)
+    return all(landmarks[i].visibility >= cfg.visibility_floor for i in _tracked_indices(cfg))
 
 
 def score_pose(
@@ -221,12 +228,13 @@ def zone_of(metrics: ScoredPosture, cfg: ScoringConfig) -> str:
     Returns "bad" when any metric passes its enter threshold, "good" when all
     metrics are below their exit thresholds, "neutral" in the hysteresis band
     between them."""
-    enter = (
+    enter = [
         (metrics.head_forward_deg, cfg.head_forward_deg),
-        (metrics.trunk_lean_deg, cfg.trunk_lean_deg),
         (metrics.head_tilt_deg, cfg.head_tilt_deg),
         (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
-    )
+    ]
+    if cfg.trunk_lean_required:
+        enter.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
     if any(abs(value) > threshold for value, threshold in enter):
         return "bad"
     if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in enter):

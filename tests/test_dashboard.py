@@ -76,6 +76,41 @@ def test_nudge_endpoint_enqueues_test_prompt() -> None:
     assert audio.calls == 1
 
 
+def test_nudge_endpoints_publish_visible_reminder_events() -> None:
+    """Every reminder is visible, not just audible: the test endpoints publish
+    banner events through the hub (voice carries the prompt text), with
+    sequence numbers from the same counter as state-machine nudges."""
+    hub, audio = DashboardHub(), RecordingAudio()
+    client = TestClient(create_app(hub, audio, feedback=RuntimeFeedback(chime_text="sit up")))
+
+    client.post("/nudge/test")
+    test_event, test_seq = hub.latest_direct_event()
+    client.post("/nudge/chime")
+    chime_event, chime_seq = hub.latest_direct_event()
+    client.post("/nudge/voice")
+    voice_event, voice_seq = hub.latest_direct_event()
+
+    assert test_event["kind"] == "test" and test_event["text"] == "chime + voice"
+    assert chime_event["kind"] == "chime"
+    assert voice_event == {"kind": "voice", "seq": voice_event["seq"], "text": "sit up"}
+    assert test_seq < chime_seq < voice_seq  # one shared counter, no collisions
+
+
+def test_ws_pushes_test_reminder_events_without_a_snapshot() -> None:
+    """The banner must fire on click, not on the next metrics frame: direct
+    events go out as their own WS message type."""
+    hub, audio = DashboardHub(), RecordingAudio()
+    client = TestClient(create_app(hub, audio))
+
+    with client.websocket_connect("/ws") as ws:
+        hub.publish_nudge_event("chime")
+        payload = ws.receive_json()
+
+    assert payload["type"] == "nudge_event"
+    assert payload["kind"] == "chime"
+    assert "seq" in payload
+
+
 def test_separate_chime_and_voice_endpoints() -> None:
     """Each channel fires independently; mode/silence cannot block them
     (spec: test endpoints are hardware-verification commands)."""
@@ -298,6 +333,16 @@ def test_index_has_feedback_controls_and_visual_event_targets() -> None:
                        "nudge-event", "feedback-error"):
         assert f'id="{element_id}"' in page
     assert "session-only" in page  # UI states when a setting is not persisted
+    # Plain language: 'reminder' everywhere, never 'nudge' (task scope 2).
+    assert "Test reminder" in page
+    assert "Test nudge" not in page
+    assert "Reminder: " in page
+    # Audio line carries the full status: ready/TTS/sink plus an error target.
+    assert 'id="audio-detail"' in page
+    assert 'id="audio-error"' in page
+    assert "tts_backend" in page
+    # Trunk-lean-optional note target on the trunk tile band.
+    assert "trunk_note" in page
 
 
 def test_index_has_band_labels_and_unreliable_detail_targets() -> None:

@@ -16,6 +16,11 @@ scoring:
   hysteresis_margin_deg: 3.0
   # MediaPipe landmark visibility must clear this floor for a score to be trusted.
   visibility_floor: 0.5
+  # High-mount framing (camera well above head height) can keep hips out of
+  # frame at working distance. Set false to require only ears and shoulders:
+  # trunk lean then reports "unavailable" and drops out of the BAD decision,
+  # but head-forward / head-tilt / shoulder-level reminders still fire.
+  trunk_lean_required: true
   # Depth gate: person must sit inside this band (meters) to be scored.
   depth_min_m: 0.6
   depth_max_m: 2.5
@@ -32,4 +37,5 @@ state:
 audio:
   # PulseAudio/PipeWire sink name; null = first USB audio sink.
   sink: null
-  chime_text: "fix your posture"
+  # Spoken prompt wording (rendered by TTS; editable at runtime on the dashboard).
+  voice_text: "Please fix your posture"
