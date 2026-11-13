@@ -108,6 +108,27 @@ def test_ws_pushes_each_new_snapshot() -> None:
         assert ws.receive_json()["state"] == "bad_chime"
 
 
+def test_index_serves_placement_guide_diagrams() -> None:
+    """The placement card embeds both guide SVGs inline (collapsed by default)."""
+    hub = DashboardHub()
+    client = TestClient(create_app(hub, RecordingAudio()))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert 'id="placement-guide"' in page
+    assert "<details" in page  # collapsed so video/metrics stay above the fold
+    # Both scenes from the angled placement guide, as inline SVG.
+    assert 'id="placement-guide-top"' in page
+    assert 'id="placement-guide-side"' in page
+    assert "aria-label=\"Top view: camera positions by angle" in page
+    assert "aria-label=\"Side view: camera above and beside the monitor" in page
+    # High-mount-first text (PR #5) stays alongside the diagrams.
+    assert "Mount the camera HIGH" in page
+    assert "Alternative for deep desks" in page
+
+
 def test_dead_ws_client_is_dropped() -> None:
     hub = DashboardHub()
     hub.publish_metrics(make_snapshot())
