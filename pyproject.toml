@@ -12,23 +12,33 @@ license = { text = "MIT" }
 dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
+    # Dashboard is part of the always-on runtime, not a hardware extra.
+    # [standard] pulls the WebSocket libraries (websockets) /ws needs.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "httpx>=0.27",  # TestClient transport for the dashboard tests
 ]
 # Heavy camera/pose deps are optional so CI and dev machines install fast.
 # The RealSense and MediaPipe imports are lazy (inside camera.py / pose.py).
 hardware = [
     "pyrealsense2>=2.56",
-    "mediapipe>=0.10",
+    # Pinned to the mp.solutions.pose legacy API the pose worker uses;
+    # mediapipe 1.x removed it.
+    "mediapipe>=0.10,<1.0",
     "opencv-python>=4.8",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+posture_guard = ["dashboard/static/*"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Posture Guard</title>
+<style>
+  :root {
+    --bg: #14171c; --panel: #1d222a; --line: #2c333e; --text: #e8ebf0;
+    --muted: #8b95a3; --good: #4cc36a; --warn: #ffb340; --bad: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 20px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; letter-spacing: 0.12em; margin: 0; color: var(--muted); }
+  .badge {
+    padding: 4px 14px; border-radius: 999px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; background: #333;
+  }
+  .badge.good       { background: var(--good); color: #0b2412; }
+  .badge.bad_chime,
+  .badge.bad_voice  { background: var(--warn); color: #3a2503; }
+  .badge.unreliable { background: var(--bad); color: #3a0b0b; }
+  .badge.no_person  { background: #3a4250; color: var(--text); }
+  .stat { color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--text); }
+  main {
+    display: grid; gap: 16px; padding: 16px 20px;
+    grid-template-columns: minmax(320px, 2fr) minmax(260px, 1fr);
+  }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .video-wrap {
+    position: relative; background: #000; border-radius: 8px;
+    overflow: hidden; border: 1px solid var(--line);
+  }
+  .video-wrap img, .video-wrap canvas { display: block; width: 100%; height: auto; }
+  .video-wrap canvas { position: absolute; inset: 0; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .panel h2 {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  .tile .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 26px; font-weight: 600; }
+  .tile .value.bad { color: var(--warn); }
+  .status-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; }
+  .status-row .stat b { font-weight: 600; }
+  #warnings:empty { display: none; }
+  #warnings {
+    border: 1px solid var(--warn); color: var(--warn); border-radius: 6px;
+    padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
+  }
+  ul.guide { margin: 0; padding-left: 18px; color: var(--muted); }
+  ul.guide li { margin: 4px 0; }
+  button {
+    margin-top: 12px; padding: 9px 16px; border: 0; border-radius: 6px;
+    background: var(--good); color: #0b2412; font-weight: 600; font-size: 14px;
+    cursor: pointer; width: 100%;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <h1>POSTURE-GUARD</h1>
+  <span id="state-badge" class="badge no_person">waiting</span>
+  <span class="stat"><b id="fps">-</b> fps</span>
+  <span class="stat">depth <b id="depth">-</b></span>
+</header>
+<main>
+  <div class="video-wrap">
+    <img id="video" src="/video.mjpg" alt="Live camera view with posture overlay">
+    <canvas id="overlay"></canvas>
+  </div>
+  <div>
+    <div id="warnings"></div>
+    <div class="panel">
+      <h2>Posture metrics</h2>
+      <div class="tiles">
+        <div class="tile"><div class="label">Head forward</div><div class="value" id="m-head_forward_deg">-</div></div>
+        <div class="tile"><div class="label">Trunk lean</div><div class="value" id="m-trunk_lean_deg">-</div></div>
+        <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div></div>
+        <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div></div>
+      </div>
+      <div class="status-row">
+        <span class="stat">camera <b id="camera">-</b></span>
+        <span class="stat">audio <b id="audio">-</b></span>
+      </div>
+    </div>
+    <div class="panel" style="margin-top: 16px">
+      <h2>Camera placement</h2>
+      <ul class="guide">
+        <li>Person fully in frame, facing the camera</li>
+        <li>Sitting 0.6&ndash;2.5&nbsp;m from the camera</li>
+        <li>Camera at about head height</li>
+        <li>USB 3 port for stable depth</li>
+      </ul>
+      <button id="test-nudge">&#9654; Test nudge</button>
+    </div>
+  </div>
+</main>
+<script>
+// WS payload order matches scoring.py indices: ears, shoulders, hips.
+const NAMES = ["lear", "rear", "ls", "rs", "lh", "rh"];
+const SKELETON = [["lear", "rear"], ["lear", "ls"], ["rear", "rs"],
+                  ["ls", "rs"], ["ls", "lh"], ["rs", "rh"], ["lh", "rh"]];
+
+const badge = document.getElementById("state-badge");
+const video = document.getElementById("video");
+const overlay = document.getElementById("overlay");
+const last = { landmarks: null };
+
+function metric(id, value) {
+  const el = document.getElementById("m-" + id);
+  el.textContent = value === null ? "-" : value.toFixed(0) + "\u00B0";
+  el.classList.toggle("bad", value !== null && Math.abs(value) >= 6);
+}
+
+function drawSkeleton() {
+  const w = video.clientWidth, h = video.clientHeight;
+  overlay.width = w; overlay.height = h;
+  const ctx = overlay.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  if (!last.landmarks) return;
+  const pts = {};
+  last.landmarks.forEach(([x, y], i) => { pts[NAMES[i]] = [x * w, y * h]; });
+  ctx.strokeStyle = "#4cc36a"; ctx.lineWidth = 3;
+  SKELETON.forEach(([a, b]) => {
+    ctx.beginPath(); ctx.moveTo(...pts[a]); ctx.lineTo(...pts[b]); ctx.stroke();
+  });
+  ctx.fillStyle = "#4cc36a";
+  Object.values(pts).forEach(([x, y]) => {
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
+  });
+}
+
+function apply(payload) {
+  badge.textContent = payload.state.replace(/_/g, " ");
+  badge.className = "badge " + payload.state;
+  document.getElementById("fps").textContent = payload.fps;
+  document.getElementById("depth").textContent =
+    payload.depth_m === null ? "-" : payload.depth_m.toFixed(1) + " m";
+  Object.entries(payload.metrics).forEach(([k, v]) => metric(k, v));
+  const warnings = document.getElementById("warnings");
+  warnings.textContent = payload.warnings.join(" \u00B7 ");
+  const cam = payload.camera;
+  document.getElementById("camera").textContent = cam.connected
+    ? (cam.usb_type ? "USB " + cam.usb_type : "connected")
+    : "unavailable";
+  const aud = payload.audio;
+  document.getElementById("audio").textContent = aud.ready
+    ? (aud.sink ? aud.sink : "default sink")
+    : "not ready";
+  last.landmarks = payload.landmarks.length ? payload.landmarks : null;
+  drawSkeleton();
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onmessage = (event) => apply(JSON.parse(event.data));
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+connect();
+window.addEventListener("resize", drawSkeleton);
+
+document.getElementById("test-nudge").addEventListener("click", async (event) => {
+  const button = event.target;
+  button.disabled = true;
+  try { await fetch("/nudge/test", { method: "POST" }); }
+  finally { button.disabled = false; }
+});
+</script>
+</body>
+</html>

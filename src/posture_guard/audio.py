@@ -1,0 +1,214 @@
+"""Audio worker: chime-then-voice nudge playback (spec §audio.py).
+
+Pre-renders every prompt to WAV at startup — the chime is synthesized tone
+pairs (no dependency), speech via pico2wave with espeak-ng as fallback — so
+playback is a single paplay call on the configured sink. One daemon thread
+owns the queue: prompts serialize, never overlap, and enqueue() never blocks
+the camera or state-machine threads. External commands all flow through an
+injected runner, so tests stub the subprocess layer entirely.
+"""
+
+from __future__ import annotations
+
+import math
+import queue
+import shutil
+import struct
+import subprocess
+import tempfile
+import threading
+import wave
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from posture_guard.config import AudioConfig
+from posture_guard.state import Nudge
+
+SAMPLE_RATE = 44100
+
+Runner = Callable[[Sequence[str]], "CommandResult"]
+Which = Callable[[str], str | None]
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    returncode: int
+    stdout: str = ""
+
+
+@dataclass(frozen=True)
+class AudioStatus:
+    """Operational status, safe to render on the dashboard."""
+
+    ready: bool  # at least one prompt is playable
+    sink: str | None  # resolved sink name, None = paplay default
+    tts_backend: str | None  # "pico2wave" | "espeak-ng" | None
+    error: str | None = None
+
+
+def _render_chime(path: Path) -> None:
+    """Two-tone chime (660 -> 990 Hz) with exponential decay, 16-bit mono WAV."""
+    samples: list[float] = []
+    for freq, seconds in ((660.0, 0.15), (990.0, 0.25)):
+        total = int(SAMPLE_RATE * seconds)
+        for i in range(total):
+            decay = math.exp(-3.0 * i / total)
+            samples.append(0.6 * decay * math.sin(2 * math.pi * freq * i / SAMPLE_RATE))
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(b"".join(struct.pack("<h", int(s * 32767)) for s in samples))
+
+
+class AudioWorker:
+    """Serialized nudge playback on a dedicated daemon thread.
+
+    Duplicate pending nudges are dropped (the state machine already enforces
+    the voice cooldown); test_nudge() bypasses dedupe so the dashboard button
+    always fires the full chime + voice sequence for hardware verification.
+    """
+
+    def __init__(
+        self,
+        config: AudioConfig,
+        *,
+        sound_dir: Path | None = None,
+        paplay_cmd: str = "paplay",
+        pactl_cmd: str = "pactl",
+        which: Which = shutil.which,
+        runner: Runner | None = None,
+    ):
+        self._config = config
+        self._paplay = paplay_cmd
+        self._pactl = pactl_cmd
+        self._which = which
+        self._runner: Runner = runner or self._run_subprocess
+        self._sound_dir = Path(sound_dir or tempfile.mkdtemp(prefix="posture-guard-audio-"))
+        self._queue: queue.Queue[tuple[Nudge, Path] | None] = queue.Queue()
+        self._pending: set[Nudge] = set()
+        self._pending_lock = threading.Lock()
+        self._sounds: dict[Nudge, Path] = {}
+        self._sink: str | None = None
+        self._tts_backend: str | None = None
+        self._error: str | None = None
+        self._thread: threading.Thread | None = None
+
+    # -- lifecycle -----------------------------------------------------------------
+
+    def start(self) -> AudioStatus:
+        """Pre-render prompts, resolve the sink, and start the playback thread."""
+        self._render_sounds()
+        self._sink = self._config.sink or self._discover_usb_sink()
+        self._thread = threading.Thread(
+            target=self._playback_loop, name="audio-worker", daemon=True
+        )
+        self._thread.start()
+        return self.status
+
+    def close(self) -> None:
+        self._queue.put(None)
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+    @property
+    def status(self) -> AudioStatus:
+        return AudioStatus(
+            ready=bool(self._sounds),
+            sink=self._sink,
+            tts_backend=self._tts_backend,
+            error=self._error,
+        )
+
+    # -- public API (caller-side, never blocks on playback) -------------------------
+
+    def enqueue(self, nudge: Nudge, *, force: bool = False) -> None:
+        """Queue a nudge for playback. Returns immediately; a duplicate of a
+        nudge that is queued or currently playing is dropped."""
+        path = self._sounds.get(nudge)
+        if path is None:
+            return  # nothing rendered for this nudge (e.g. no TTS backend)
+        with self._pending_lock:
+            if not force and nudge in self._pending:
+                return
+            self._pending.add(nudge)
+        self._queue.put((nudge, path))
+
+    def test_nudge(self) -> None:
+        """Dashboard hook: force-play chime then voice, bypassing dedupe."""
+        for nudge in (Nudge.CHIME, Nudge.VOICE):
+            self.enqueue(nudge, force=True)
+
+    # -- internals -------------------------------------------------------------------
+
+    def _render_sounds(self) -> None:
+        self._sound_dir.mkdir(parents=True, exist_ok=True)
+        chime_path = self._sound_dir / "chime.wav"
+        _render_chime(chime_path)
+        self._sounds[Nudge.CHIME] = chime_path
+        self._tts_backend = self._render_voice()
+
+    def _render_voice(self) -> str | None:
+        """Render the spoken prompt; pico2wave first, espeak-ng fallback."""
+        path = self._sound_dir / "voice.wav"
+        for backend in ("pico2wave", "espeak-ng"):
+            binary = self._which(backend)
+            if binary is None:
+                continue
+            result = self._runner([binary, "-w", str(path), self._config.chime_text])
+            if result.returncode == 0:
+                self._sounds[Nudge.VOICE] = path
+                return backend
+        self._error = "no TTS backend available (install pico2wave or espeak-ng)"
+        return None
+
+    def _discover_usb_sink(self) -> str | None:
+        """First USB audio sink from pactl, or None to use the paplay default."""
+        if self._which(self._pactl) is None:
+            return None
+        result = self._runner([self._pactl, "list", "short", "sinks"])
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            fields = line.split("\t")
+            if fields and "usb" in fields[0].lower():
+                return fields[0]
+        return None
+
+    def _playback_loop(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            nudge, path = item
+            try:
+                self._play(path)
+            finally:
+                self._queue.task_done()
+                with self._pending_lock:
+                    self._pending.discard(nudge)
+
+    def _play(self, path: Path) -> None:
+        cmd = [self._paplay]
+        if self._sink is not None:
+            cmd += ["--sink", self._sink]
+        cmd.append(str(path))
+        try:
+            result = self._runner(cmd)
+        except OSError as exc:
+            # A missing or unlaunchable player (FileNotFoundError etc.) is the
+            # same class of failure as a non-zero exit: surfaced as status,
+            # never raised out of the worker thread — a dead sink must not
+            # kill nudging.
+            self._error = f"{self._paplay} unavailable: {exc}"
+            return
+        if result.returncode != 0:
+            # Playback failures are surfaced as status, never raised out of
+            # the worker thread — a dead sink must not kill nudging.
+            self._error = f"{self._paplay} exited {result.returncode} for {path.name}"
+
+    @staticmethod
+    def _run_subprocess(cmd: Sequence[str]) -> CommandResult:
+        completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return CommandResult(returncode=completed.returncode, stdout=completed.stdout)
