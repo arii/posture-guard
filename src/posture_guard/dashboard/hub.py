@@ -31,6 +31,7 @@ class MetricsSnapshot:
     camera_connected: bool = False
     camera_usb_type: str | None = None
     camera_error: str | None = None
+    camera_source: str | None = None
     audio_ready: bool = False
     audio_sink: str | None = None
     audio_tts_backend: str | None = None
@@ -54,6 +55,7 @@ class MetricsSnapshot:
                 "connected": self.camera_connected,
                 "usb_type": self.camera_usb_type,
                 "error": self.camera_error,
+                "source": self.camera_source,
             },
             "audio": {
                 "ready": self.audio_ready,

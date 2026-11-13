@@ -61,6 +61,8 @@
     border: 1px solid var(--warn); color: var(--warn); border-radius: 6px;
     padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
   }
+  #camera-detail { color: var(--warn); }
+  #camera-detail:empty { display: none; }
   ul.guide { margin: 0; padding-left: 18px; color: var(--muted); }
   ul.guide li { margin: 4px 0; }
   button {
@@ -94,7 +96,7 @@
         <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div></div>
       </div>
       <div class="status-row">
-        <span class="stat">camera <b id="camera">-</b></span>
+        <span class="stat">camera <b id="camera">-</b><span id="camera-detail" class="stat"></span></span>
         <span class="stat">audio <b id="audio">-</b></span>
       </div>
     </div>
@@ -155,9 +157,19 @@ function apply(payload) {
   const warnings = document.getElementById("warnings");
   warnings.textContent = payload.warnings.join(" \u00B7 ");
   const cam = payload.camera;
-  document.getElementById("camera").textContent = cam.connected
-    ? (cam.usb_type ? "USB " + cam.usb_type : "connected")
-    : "unavailable";
+  // Never a bare dash: the active source and any error are always named.
+  const camEl = document.getElementById("camera");
+  if (cam.source === "realsense") {
+    camEl.textContent = cam.connected
+      ? (cam.usb_type ? "RealSense (USB " + cam.usb_type + ")" : "RealSense")
+      : "RealSense unavailable";
+  } else if (cam.source === "synthetic") {
+    camEl.textContent = "synthetic";
+  } else {
+    camEl.textContent = cam.connected ? "connected" : "unavailable";
+  }
+  document.getElementById("camera-detail").textContent =
+    cam.error ? " - " + cam.error : "";
   const aud = payload.audio;
   document.getElementById("audio").textContent = aud.ready
     ? (aud.sink ? aud.sink : "default sink")
