@@ -34,6 +34,9 @@ hardware = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+posture_guard = ["dashboard/static/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

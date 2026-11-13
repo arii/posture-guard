@@ -119,3 +119,16 @@ def test_dead_ws_client_is_dropped() -> None:
     while hub.client_count() > 0 and time.monotonic() < deadline:
         time.sleep(0.05)
     assert hub.client_count() == 0
+
+
+def test_index_page_is_served() -> None:
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    # The page is plain DOM driven by the WS payload: overlay canvas, metric
+    # tiles, state badge and the test-nudge button.
+    for fragment in ("<canvas", "/ws", "/video.mjpg", "/nudge/test", "badge"):
+        assert fragment in response.text

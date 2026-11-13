@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Protocol
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from posture_guard.dashboard.hub import DashboardHub
@@ -95,6 +96,10 @@ def create_app(
     def nudge_test() -> dict[str, str]:
         audio.test_nudge()
         return {"status": "queued"}
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(Path(__file__).parent / "static" / "index.html")
 
     return app
 
