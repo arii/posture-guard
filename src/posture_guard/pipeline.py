@@ -20,6 +20,7 @@ from numpy.typing import NDArray
 from posture_guard.camera import ColorDepth, FrameSource, SourceStatus, usb_bandwidth_warning
 from posture_guard.config import AppConfig, ScoringConfig
 from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot, ScoringThresholds
+from posture_guard.feedback import RuntimeFeedback
 from posture_guard.pose import PoseDetection, PoseDetector, default_detector, tracked_landmarks
 from posture_guard.scoring import (
     LEFT_EAR,
@@ -162,14 +163,18 @@ class PosturePipeline:
         audio: NudgeSink | None = None,
         detector: PoseDetector | None = None,
         renderer: FrameRenderer | None = None,
+        feedback: RuntimeFeedback | None = None,
     ):
         self._source = source
         self._config = config
         self._hub = hub
         self._audio = audio
+        self._feedback = feedback
         self._detector: PoseDetector = detector if detector is not None else default_detector()
         self._renderer = renderer or default_frame_renderer
-        self._state_machine = PostureStateMachine(config.state, config.scoring)
+        self._state_machine = PostureStateMachine(
+            config.state, config.scoring, timings_override=feedback
+        )
         self._thresholds = ScoringThresholds(
             head_forward_deg=config.scoring.head_forward_deg,
             trunk_lean_deg=config.scoring.trunk_lean_deg,
@@ -182,6 +187,8 @@ class PosturePipeline:
         self._thread: threading.Thread | None = None
         self._fps = 0.0
         self._last_timestamp: float | None = None
+        self._nudge_seq = 0
+        self._nudge_event: dict[str, object] | None = None
 
     @property
     def state(self) -> PostureState:
@@ -193,8 +200,19 @@ class PosturePipeline:
         detection = self._detector(frame)
         result = score_pose(detection.landmarks, detection.depth_m, self._config.scoring)
         transition = self._state_machine.update(result, frame.timestamp_s)
-        if transition.nudge is not Nudge.NONE and self._audio is not None:
-            self._audio.enqueue(transition.nudge)
+        if transition.nudge is not Nudge.NONE:
+            # Mode filter is the single enforcement point (spec): the machine
+            # keeps sole emission authority; silent/chime-only drop the audio
+            # here while state logic advances identically.
+            allowed = self._feedback is None or self._feedback.allows(transition.nudge)
+            if allowed and self._audio is not None:
+                self._audio.enqueue(transition.nudge)
+            self._nudge_seq += 1
+            self._nudge_event = {
+                "kind": transition.nudge.value,
+                "seq": self._nudge_seq,
+                "muted": not allowed,  # dropped by mode: still a visible event
+            }
         self._update_fps(frame.timestamp_s)
         if self._hub is not None:
             self._publish(detection, result, transition.state, frame)
@@ -237,6 +255,12 @@ class PosturePipeline:
             unreliable_detail=(
                 result.detail if isinstance(result, Unreliable) and result.detail else None
             ),
+            feedback=(
+                self._feedback.to_payload()
+                if self._feedback is not None
+                else None
+            ),
+            nudge_event=self._nudge_event,
         )
         self._hub.publish_metrics(snapshot)
         state_text = state.value.replace("_", " ")

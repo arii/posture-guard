@@ -28,6 +28,18 @@
   .badge.bad_voice  { background: var(--warn); color: #3a2503; }
   .badge.unreliable { background: var(--bad); color: #3a0b0b; }
   .badge.no_person  { background: #3a4250; color: var(--text); }
+  /* Synchronized nudge event: the badge flashes once in the channel's color. */
+  @keyframes nudge-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 179, 64, 0.9); }
+    100% { box-shadow: 0 0 0 18px rgba(255, 179, 64, 0); }
+  }
+  .badge.pulse { animation: nudge-pulse 0.9s ease-out 1; }
+  #nudge-event {
+    display: none; padding: 4px 14px; border-radius: 999px;
+    background: var(--warn); color: #3a2503; font-weight: 600; font-size: 12px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  #nudge-event.show { display: inline-block; }
   .stat { color: var(--muted); font-size: 13px; }
   .stat b { color: var(--text); }
   main {
@@ -82,12 +94,39 @@
     cursor: pointer; width: 100%;
   }
   button:disabled { opacity: 0.5; cursor: default; }
+  .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+  .btn-row button { margin-top: 0; }
+  .btn-row button.secondary {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line);
+  }
+  .feedback-form { margin-top: 4px; }
+  .feedback-form label {
+    display: block; font-size: 12px; color: var(--muted);
+    margin: 10px 0 4px;
+  }
+  .feedback-form input[type="text"], .feedback-form input[type="number"] {
+    width: 100%; padding: 7px 10px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+    font: inherit; font-size: 13px;
+  }
+  .mode-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mode-group label {
+    display: flex; align-items: center; gap: 6px; margin: 0;
+    padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: 13px; cursor: pointer;
+  }
+  .mode-group input { accent-color: var(--good); }
+  .session-note { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
+  #feedback-error { color: var(--bad); font-size: 12.5px; margin-top: 8px; }
+  #feedback-error:empty { display: none; }
 </style>
 </head>
 <body>
 <header>
   <h1>POSTURE-GUARD</h1>
   <span id="state-badge" class="badge no_person">waiting</span>
+  <span id="nudge-event">nudge</span>
   <span class="stat"><b id="fps">-</b> fps</span>
   <span class="stat">depth <b id="depth">-</b></span>
 </header>
@@ -197,6 +236,29 @@
       </details>
       <button id="test-nudge">&#9654; Test nudge</button>
     </div>
+    <div class="panel" style="margin-top: 16px">
+      <h2>Feedback</h2>
+      <div class="mode-group" id="mode-group">
+        <label><input type="radio" name="feedback-mode" value="chime_and_voice" checked> Chime + voice</label>
+        <label><input type="radio" name="feedback-mode" value="chime_only"> Chime only</label>
+        <label><input type="radio" name="feedback-mode" value="silent"> Silent</label>
+      </div>
+      <div class="btn-row">
+        <button id="play-chime" class="secondary">&#9835; Play chime</button>
+        <button id="play-voice" class="secondary">&#128483; Speak prompt</button>
+      </div>
+      <div class="feedback-form">
+        <label for="set-chime_text">Spoken prompt text</label>
+        <input type="text" id="set-chime_text" maxlength="120">
+        <label for="set-voice_delay_s">Voice delay (s)</label>
+        <input type="number" id="set-voice_delay_s" min="1" step="0.5">
+        <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
+        <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
+        <div class="btn-row"><button id="apply-settings">Apply settings</button></div>
+        <div id="feedback-error"></div>
+        <div class="session-note">Settings apply immediately but are session-only &mdash; they reset on restart (config.yaml keeps its defaults).</div>
+      </div>
+    </div>
   </div>
 </main>
 <script>
@@ -206,10 +268,14 @@ const SKELETON = [["lear", "rear"], ["lear", "ls"], ["rear", "rs"],
                   ["ls", "rs"], ["ls", "lh"], ["rs", "rh"], ["lh", "rh"]];
 
 const badge = document.getElementById("state-badge");
+const nudgeEventEl = document.getElementById("nudge-event");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const last = { landmarks: null };
 let thresholds = null; // scoring thresholds from the server, never hardcoded
+let lastNudgeSeq = 0;  // sequence-numbered nudge events re-trigger the banner
+let nudgeEventTimer = null;
+let pulseActive = false; // apply() must not strip the pulse mid-animation
 
 function metric(id, value) {
   const el = document.getElementById("m-" + id);
@@ -242,9 +308,45 @@ function drawSkeleton() {
   });
 }
 
+function setSetting(id, value) {
+  // Server-owned values seed the form; a field being edited is never clobbered.
+  const el = document.getElementById(id);
+  if (el && document.activeElement !== el) el.value = value;
+}
+
+function applyFeedback(fb) {
+  if (!fb) return;
+  const modeInput = document.querySelector(
+    'input[name="feedback-mode"][value="' + fb.mode + '"]'
+  );
+  if (modeInput) modeInput.checked = true;
+  setSetting("set-chime_text", fb.chime_text);
+  setSetting("set-voice_delay_s", fb.voice_delay_s);
+  setSetting("set-voice_repeat_cooldown_s", fb.voice_repeat_cooldown_s);
+}
+
+function applyNudgeEvent(event) {
+  if (!event || event.seq === lastNudgeSeq) return;
+  lastNudgeSeq = event.seq;
+  const muted = event.muted ? " (muted)" : "";
+  nudgeEventEl.textContent =
+    (event.kind === "voice" ? "voice prompt" : "chime") + muted;
+  nudgeEventEl.classList.add("show");
+  badge.classList.remove("pulse");
+  void badge.offsetWidth; // restart the animation on repeated nudges
+  badge.classList.add("pulse");
+  pulseActive = true;
+  clearTimeout(nudgeEventTimer);
+  nudgeEventTimer = setTimeout(() => {
+    nudgeEventEl.classList.remove("show");
+    badge.classList.remove("pulse");
+    pulseActive = false;
+  }, 2000);
+}
+
 function apply(payload) {
   badge.textContent = payload.state.replace(/_/g, " ");
-  badge.className = "badge " + payload.state;
+  badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
   document.getElementById("fps").textContent = payload.fps;
   document.getElementById("depth").textContent =
     payload.depth_m === null ? "-" : payload.depth_m.toFixed(1) + " m";
@@ -274,6 +376,8 @@ function apply(payload) {
     : "not ready";
   last.landmarks = payload.landmarks.length ? payload.landmarks : null;
   drawSkeleton();
+  applyFeedback(payload.feedback);
+  applyNudgeEvent(payload.nudge_event);
 }
 
 function connect() {
@@ -284,11 +388,64 @@ function connect() {
 connect();
 window.addEventListener("resize", drawSkeleton);
 
+async function post(url, body) {
+  const options = { method: "POST" };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))).detail;
+    throw new Error(detail || response.status + " " + response.statusText);
+  }
+  return response.json();
+}
+
 document.getElementById("test-nudge").addEventListener("click", async (event) => {
   const button = event.target;
   button.disabled = true;
-  try { await fetch("/nudge/test", { method: "POST" }); }
+  try { await post("/nudge/test"); }
   finally { button.disabled = false; }
+});
+
+document.getElementById("play-chime").addEventListener("click", async (event) => {
+  const button = event.target;
+  button.disabled = true;
+  try { await post("/nudge/chime"); }
+  finally { button.disabled = false; }
+});
+
+document.getElementById("play-voice").addEventListener("click", async (event) => {
+  const button = event.target;
+  button.disabled = true;
+  try { await post("/nudge/voice"); }
+  finally { button.disabled = false; }
+});
+
+// Mode switches apply at once; text/timings wait for Apply so half-typed
+// prompts never re-render TTS mid-sentence.
+document.querySelectorAll("input[name='feedback-mode']").forEach((input) => {
+  input.addEventListener("change", async () => {
+    const error = document.getElementById("feedback-error");
+    error.textContent = "";
+    try { await post("/feedback/settings", { mode: input.value }); }
+    catch (exc) { error.textContent = String(exc.message || exc); }
+  });
+});
+
+document.getElementById("apply-settings").addEventListener("click", async () => {
+  const error = document.getElementById("feedback-error");
+  error.textContent = "";
+  const body = {};
+  const text = document.getElementById("set-chime_text").value;
+  if (text.trim()) body.chime_text = text.trim();
+  for (const key of ["voice_delay_s", "voice_repeat_cooldown_s"]) {
+    const value = parseFloat(document.getElementById("set-" + key).value);
+    if (!Number.isNaN(value)) body[key] = value;
+  }
+  try { await post("/feedback/settings", body); }
+  catch (exc) { error.textContent = String(exc.message || exc); }
 });
 </script>
 </body>

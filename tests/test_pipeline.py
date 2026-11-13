@@ -17,6 +17,7 @@ from conftest import make_pose
 from posture_guard.camera import ColorDepth, SourceStatus, SyntheticFrameSource
 from posture_guard.config import AppConfig, ScoringConfig
 from posture_guard.dashboard.hub import DashboardHub, ScoringThresholds
+from posture_guard.feedback import FeedbackMode, RuntimeFeedback
 from posture_guard.pipeline import PosturePipeline, placement_warnings
 from posture_guard.pose import PoseDetection, SyntheticPoseDetector, center_depth_m
 from posture_guard.scoring import (
@@ -77,6 +78,7 @@ def feed(pipeline: PosturePipeline, detector: MutableDetector, seconds: float, i
 
 def build_pipeline(
     detector: MutableDetector,
+    feedback: RuntimeFeedback | None = None,
 ) -> tuple[PosturePipeline, DashboardHub, RecordingAudio]:
     hub = DashboardHub()
     audio = RecordingAudio()
@@ -87,6 +89,7 @@ def build_pipeline(
         audio=audio,
         detector=detector,
         renderer=fake_jpeg,
+        feedback=feedback,
     )
     return pipeline, hub, audio
 
@@ -215,6 +218,102 @@ def test_fps_converges_to_frame_rate() -> None:
 
     snapshot, _ = hub.latest_metrics()
     assert snapshot.fps == pytest.approx(30.0, rel=0.01)
+
+
+# -- feedback mode filter and nudge events -------------------------------------
+
+
+def _drive_to_chime(detector: MutableDetector, pipeline: PosturePipeline, index: int) -> int:
+    """Settle into GOOD, then slouch past the bad-sustain window."""
+    index = feed(pipeline, detector, 2.0, index)
+    detector.pose = make_pose(
+        {
+            7: SimpleLandmark(x=0.48, y=0.54),
+            8: SimpleLandmark(x=0.56, y=0.54),
+        }
+    )
+    return feed(pipeline, detector, 2.5, index)
+
+
+def test_snapshot_without_feedback_wiring_reports_none() -> None:
+    detector = MutableDetector(make_pose())
+    pipeline, hub, _ = build_pipeline(detector)
+
+    feed(pipeline, detector, 1.0, 0)
+
+    snapshot, _ = hub.latest_metrics()
+    assert snapshot.feedback is None
+    assert snapshot.nudge_event is None
+
+
+def test_silent_mode_drops_audio_but_state_and_events_continue() -> None:
+    """The mode filter is the only enforcement point: the machine still emits
+    and the dashboard still gets the (muted) visual event."""
+    detector = MutableDetector(make_pose())
+    feedback = RuntimeFeedback(mode=FeedbackMode.SILENT)
+    pipeline, hub, audio = build_pipeline(detector, feedback)
+
+    _drive_to_chime(detector, pipeline, 0)
+
+    assert hub.latest_metrics()[0].state == "bad_chime"  # state logic unchanged
+    assert audio.enqueued == []
+    event = hub.latest_metrics()[0].nudge_event
+    assert event == {"kind": "chime", "seq": 1, "muted": True}
+    assert hub.latest_metrics()[0].feedback is not None
+    assert hub.latest_metrics()[0].feedback["mode"] == "silent"
+
+
+def test_chime_only_mode_drops_voice_only() -> None:
+    detector = MutableDetector(make_pose())
+    feedback = RuntimeFeedback(mode=FeedbackMode.CHIME_ONLY)
+    pipeline, hub, audio = build_pipeline(detector, feedback)
+
+    index = _drive_to_chime(detector, pipeline, 0)
+    assert audio.enqueued == [Nudge.CHIME]
+    feed(pipeline, detector, 10.0, index)  # past the default 10 s voice delay
+
+    assert hub.latest_metrics()[0].state == "bad_voice"
+    assert audio.enqueued == [Nudge.CHIME]  # voice never reaches the sink
+    assert hub.latest_metrics()[0].nudge_event == {
+        "kind": "voice", "seq": 2, "muted": True,
+    }
+
+
+def test_mode_takes_effect_on_the_next_nudge_without_restart() -> None:
+    detector = MutableDetector(make_pose())
+    feedback = RuntimeFeedback()  # chime + voice at start
+    pipeline, hub, audio = build_pipeline(detector, feedback)
+
+    index = _drive_to_chime(detector, pipeline, 0)
+    assert audio.enqueued == [Nudge.CHIME]
+    index = feed(pipeline, detector, 10.0, index)
+    assert audio.enqueued == [Nudge.CHIME, Nudge.VOICE]
+
+    # Presenter switches to silent mid-demo; the very next nudge is dropped.
+    feedback.apply(mode="silent")
+    index = feed(pipeline, detector, 30.0, index)  # past the 30 s repeat cooldown
+    assert audio.enqueued == [Nudge.CHIME, Nudge.VOICE]
+    assert hub.latest_metrics()[0].nudge_event["muted"] is True
+
+
+def test_two_chime_emissions_produce_two_sequence_numbers() -> None:
+    """Sequence numbers let the UI re-trigger the banner even when the state
+    string is unchanged (spec: repeated nudges re-trigger the visual event)."""
+    detector = MutableDetector(make_pose())
+    feedback = RuntimeFeedback()
+    pipeline, hub, _ = build_pipeline(detector, feedback)
+
+    index = _drive_to_chime(detector, pipeline, 0)
+    first = hub.latest_metrics()[0].nudge_event
+
+    # Recover, then slouch again for a second chime.
+    detector.pose = make_pose()
+    index = feed(pipeline, detector, 4.0, index)
+    index = _drive_to_chime(detector, pipeline, index)
+    second = hub.latest_metrics()[0].nudge_event
+
+    assert first["kind"] == "chime" and second["kind"] == "chime"
+    assert second["seq"] > first["seq"]
 
 
 def test_threaded_pipeline_runs_against_synthetic_source() -> None:
