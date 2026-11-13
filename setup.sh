@@ -31,6 +31,25 @@ $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     || $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     libpulse0 pulseaudio-utils ffmpeg espeak-ng
 
+# --- 1b. RealSense udev rules ------------------------------------------------
+# The rules file grants non-root access to the RealSense USB device. Installing
+# it is best-effort: without root we print the manual command instead of failing.
+RULES_SRC="99-realsense-libusb.rules"
+RULES_DST="/etc/udev/rules.d/99-realsense-libusb.rules"
+if [[ -f "$RULES_SRC" ]]; then
+    if [[ -f "$RULES_DST" ]] && cmp -s "$RULES_SRC" "$RULES_DST"; then
+        echo "==> RealSense udev rules already installed"
+    elif [[ "$(id -u)" -eq 0 ]]; then
+        echo "==> Installing RealSense udev rules"
+        cp "$RULES_SRC" "$RULES_DST"
+        udevadm control --reload-rules && udevadm trigger
+    else
+        echo "==> Skipping udev rule install (not root) — to install manually run:"
+        echo "      sudo cp \"$(pwd)/$RULES_SRC\" $RULES_DST"
+        echo "      sudo udevadm control --reload-rules && sudo udevadm trigger"
+    fi
+fi
+
 # --- 2. Python environment ---------------------------------------------------
 echo "==> Creating venv and installing Python dependencies"
 python3 -m venv .venv
