@@ -22,6 +22,12 @@ from posture_guard.config import AppConfig, ScoringConfig
 from posture_guard.dashboard.hub import DashboardHub, MetricsSnapshot
 from posture_guard.pose import PoseDetection, PoseDetector, default_detector, tracked_landmarks
 from posture_guard.scoring import (
+    LEFT_EAR,
+    LEFT_HIP,
+    LEFT_SHOULDER,
+    RIGHT_EAR,
+    RIGHT_HIP,
+    RIGHT_SHOULDER,
     Landmark,
     ScoredPosture,
     ScoringResult,
@@ -59,11 +65,43 @@ def default_frame_renderer(
     return encode_jpeg(draw_overlay(color, landmarks, state_text, depth_text))
 
 
+def low_visibility_warning(
+    landmarks: Sequence[Landmark] | None, cfg: ScoringConfig
+) -> str:
+    """Name the landmark groups below the visibility floor, with the geometry
+    fix. At close range (e.g. 0.7 m) the D435i vertical FOV covers ~0.5 m, so
+    seated hips can never be in frame — trunk lean is then unavailable and the
+    fix is to move back, not to zoom or tilt."""
+    if landmarks is None:
+        return "person not fully in frame - sit facing the camera, 1.0-1.5 m away"
+    floor = cfg.visibility_floor
+
+    def group_missing(indices: tuple[int, int]) -> bool:
+        # Either landmark of a pair below the floor means the group is not
+        # reliably tracked — name it.
+        return any(landmarks[i].visibility < floor for i in indices)
+
+    missing: list[str] = []
+    if group_missing((LEFT_EAR, RIGHT_EAR)):
+        missing.append("head")
+    if group_missing((LEFT_SHOULDER, RIGHT_SHOULDER)):
+        missing.append("shoulders")
+    if group_missing((LEFT_HIP, RIGHT_HIP)):
+        missing.append("hips")
+    if not missing:
+        return "person not fully in frame - sit facing the camera, 1.0-1.5 m away"
+    named = " and ".join(missing)
+    if "hips" in missing:
+        return f"{named} not visible - trunk lean unavailable, move back to 1.0-1.5 m"
+    return f"{named} not visible - sit facing the camera, 1.0-1.5 m away"
+
+
 def placement_warnings(
     result: ScoringResult,
     depth_m: float | None,
     camera: SourceStatus,
     cfg: ScoringConfig,
+    landmarks: Sequence[Landmark] | None = None,
 ) -> tuple[str, ...]:
     """Camera-placement guidance carried on the WS payload (spec: the placement
     guide doubles as a live checklist — each failure carries its own warning)."""
@@ -82,7 +120,7 @@ def placement_warnings(
             else:
                 warnings.append(f"person too close - {depth_m:.1f} m (band {band})")
         elif result.reason is UnreliableReason.LOW_VISIBILITY:
-            warnings.append("person not fully in frame - keep shoulders and hips visible")
+            warnings.append(low_visibility_warning(landmarks, cfg))
         elif result.reason is UnreliableReason.DEPTH_UNREADABLE:
             warnings.append("depth unreadable - check the camera view")
         elif result.reason is UnreliableReason.NO_POSE:
@@ -175,7 +213,9 @@ class PosturePipeline:
             camera_usb_type=camera.usb_type,
             camera_error=camera.error,
             camera_source=camera.kind,
-            warnings=placement_warnings(result, depth_m, camera, self._config.scoring),
+            warnings=placement_warnings(
+                result, depth_m, camera, self._config.scoring, detection.landmarks
+            ),
             landmarks=(
                 tracked_landmarks(detection.landmarks)
                 if detection.landmarks is not None
