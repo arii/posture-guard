@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "RealSense posture corrector with live verification dashboard"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
