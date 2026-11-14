@@ -34,6 +34,7 @@ from posture_guard.scoring import (
     ScoringResult,
     Unreliable,
     UnreliableReason,
+    head_clipped_top,
     score_pose,
 )
 from posture_guard.state import Nudge, PostureState, PostureStateMachine, Transition
@@ -60,13 +61,72 @@ def default_frame_renderer(
     state_text: str,
     depth_text: str,
     reason_text: str = "",
+    *,
+    wire_color: str = "",
 ) -> bytes:
     """Skeleton overlay + banner + JPEG encode; OpenCV imported lazily."""
     from posture_guard.dashboard.annotate import draw_overlay, encode_jpeg
 
     return encode_jpeg(
-        draw_overlay(color, landmarks, state_text, depth_text, reason_text)
+        draw_overlay(color, landmarks, state_text, depth_text, reason_text, wire_color)
     )
+
+
+# Wireframe stroke colors, shared with the client canvas (index.html): the
+# skeleton never contradicts the header — one reliability signal, one color.
+_WIRE_GOOD = "#10b981"   # emerald: tracked and good
+_WIRE_DRIFT = "#f59e0b"  # amber: drifting past a threshold, not yet confirmed
+_WIRE_BAD = "#ef4444"    # crimson: sustained breach
+_WIRE_UNRELIABLE = "#8b95a3"  # slate: do not trust this frame
+
+
+def wire_color_for(state: str, result: ScoringResult, cfg: ScoringConfig) -> str:
+    """Wireframe stroke color bound to reliability BEFORE angle thresholds:
+    slate when the frame is untrustworthy, crimson only for a confirmed breach,
+    amber for pre-sustain drift, emerald for good."""
+    if state == "unreliable":
+        return _WIRE_UNRELIABLE
+    if state in ("bad_chime", "bad_voice"):
+        return _WIRE_BAD
+    angles = result if isinstance(result, ScoredPosture) else None
+    if angles is not None and any(
+        abs(value) > threshold
+        for value, threshold in (
+            (angles.head_forward_deg, cfg.head_forward_deg),
+            (angles.head_tilt_deg, cfg.head_tilt_deg),
+            (angles.shoulder_level_deg, cfg.shoulder_level_deg),
+        )
+    ):
+        return _WIRE_DRIFT
+    if state == "good":
+        return _WIRE_GOOD
+    return _WIRE_UNRELIABLE  # no_person (nothing draws, but stay neutral)
+
+
+def root_cause(
+    result: ScoringResult,
+    depth_m: float | None,
+    cfg: ScoringConfig,
+    landmarks: Sequence[Landmark] | None,
+) -> dict[str, object] | None:
+    """The one actionable cause for the status-badge pill: what is wrong and
+    what to do about it. The geometric boundary check wins first — a head
+    cropped by the top edge is visible and fixable regardless of the scoring
+    verdict — then the Unreliable reason. None when the frame is scored and
+    in frame."""
+    if landmarks is not None and head_clipped_top(landmarks):
+        return {"title": "top edge clipped", "action": "tilt camera up", "edge": "top"}
+    if isinstance(result, Unreliable):
+        if result.reason is UnreliableReason.NO_POSE:
+            return {"title": "no person seen", "action": "sit fully in frame", "edge": None}
+        if result.reason is UnreliableReason.LOW_VISIBILITY:
+            return {"title": "low confidence", "action": "sit facing the camera", "edge": None}
+        if result.reason is UnreliableReason.DEPTH_OUT_OF_BAND:
+            if depth_m is not None and depth_m < cfg.depth_min_m:
+                return {"title": "person too close", "action": "step back", "edge": None}
+            return {"title": "person too far", "action": "step closer", "edge": None}
+        return {"title": "depth unreadable", "action": "check the camera view", "edge": None}
+    return None
 
 
 def low_visibility_warning(
@@ -283,6 +343,9 @@ class PosturePipeline:
                 result.detail if isinstance(result, Unreliable) and result.detail else None
             ),
             trunk_note=trunk_note,
+            root_cause=root_cause(
+                result, depth_m, self._config.scoring, detection.landmarks
+            ),
             feedback=(
                 self._feedback.to_payload()
                 if self._feedback is not None
@@ -295,7 +358,14 @@ class PosturePipeline:
         depth_text = f"depth {depth_m:.1f} m" if depth_m is not None else "depth -"
         reason_text = result.detail if isinstance(result, Unreliable) else ""
         self._hub.publish_video(
-            self._renderer(frame.color, detection.landmarks, state_text, depth_text, reason_text)
+            self._renderer(
+                frame.color,
+                detection.landmarks,
+                state_text,
+                depth_text,
+                reason_text,
+                wire_color=wire_color_for(state.value, result, self._config.scoring),
+            )
         )
 
     # -- fps and threaded run ---------------------------------------------------------

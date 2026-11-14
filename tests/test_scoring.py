@@ -11,6 +11,7 @@ import pytest
 from conftest import GOOD_ANGLES, SLOUCHED_ANGLES, make_pose, mirror_x
 from posture_guard.config import BaselineDeviationConfig, ScoringConfig
 from posture_guard.scoring import (
+    HEAD_CLIP_MARGIN,
     LEFT_EAR,
     LEFT_HIP,
     LEFT_SHOULDER,
@@ -23,6 +24,7 @@ from posture_guard.scoring import (
     Unreliable,
     UnreliableReason,
     deviation_zone,
+    head_clipped_top,
     low_visibility_detail,
     measure_head_forward,
     measure_head_tilt,
@@ -501,3 +503,20 @@ class TestDegradedFeedback:
         result = score_pose(pose, 1.4, cfg)
         assert isinstance(result, Unreliable)
         assert result.reason is UnreliableReason.LOW_VISIBILITY
+
+
+# -- top-edge boundary check -----------------------------------------------------
+
+
+def test_head_clipped_top_when_ear_in_top_margin() -> None:
+    pose = make_pose({LEFT_EAR: SimpleLandmark(x=0.46, y=0.05)})
+    assert head_clipped_top(pose) is True
+
+
+def test_head_clipped_top_false_for_centered_pose() -> None:
+    assert head_clipped_top(make_pose()) is False
+
+
+def test_head_clipped_top_false_when_ear_at_margin_boundary() -> None:
+    pose = make_pose({LEFT_EAR: SimpleLandmark(x=0.46, y=HEAD_CLIP_MARGIN)})
+    assert head_clipped_top(pose) is False

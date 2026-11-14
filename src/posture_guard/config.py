@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_type_hints
 
 import yaml
 
@@ -115,10 +116,27 @@ class AppConfig:
 
 
 def _build(cls, data: dict | None):  # noqa: ANN201 - factory helper
-    """Construct a frozen config dataclass, ignoring keys it does not define."""
+    """Construct a frozen config dataclass, ignoring keys it does not define
+    and building nested dataclass-typed fields (e.g. ScoringConfig.
+    baseline_deviation) from their mappings instead of passing the raw dict
+    through — a raw dict leaks past the dataclass and crashes attribute
+    access at startup."""
     data = data or {}
-    known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-    return cls(**{k: v for k, v in data.items() if k in known})
+    hints = get_type_hints(cls)
+    kwargs: dict[str, object] = {}
+    for key, value in data.items():
+        if key not in cls.__dataclass_fields__:  # type: ignore[attr-defined]
+            continue
+        nested = hints.get(key)
+        nested_dataclass = (
+            isinstance(value, dict)
+            and nested is not None
+            and hasattr(nested, "__dataclass_fields__")
+        )
+        if nested_dataclass:
+            value = _build(nested, value)
+        kwargs[key] = value
+    return cls(**kwargs)
 
 
 def load_config(path: str | Path) -> AppConfig:

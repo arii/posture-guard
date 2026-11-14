@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -18,7 +19,7 @@ from posture_guard.camera import ColorDepth, SourceStatus, SyntheticFrameSource
 from posture_guard.config import AppConfig, FeedbackConfig, PositiveChimeConfig, ScoringConfig
 from posture_guard.dashboard.hub import DashboardHub, ScoringThresholds
 from posture_guard.feedback import FeedbackMode, RuntimeFeedback
-from posture_guard.pipeline import PosturePipeline, placement_warnings
+from posture_guard.pipeline import PosturePipeline, placement_warnings, root_cause, wire_color_for
 from posture_guard.pose import PoseDetection, SyntheticPoseDetector, center_depth_m
 from posture_guard.scoring import (
     LEFT_EAR,
@@ -26,6 +27,7 @@ from posture_guard.scoring import (
     RIGHT_EAR,
     RIGHT_HIP,
     RIGHT_SHOULDER,
+    ScoredPosture,
     SimpleLandmark,
     Unreliable,
     UnreliableReason,
@@ -46,9 +48,10 @@ class RecordingAudio:
 
 def fake_jpeg(
     color: np.ndarray, landmarks: object, state_text: str, depth_text: str,
-    reason_text: str = "",
+    reason_text: str = "", *,
+    wire_color: str = "",
 ) -> bytes:
-    return f"{state_text}|{depth_text}|{reason_text}".encode()
+    return f"{state_text}|{depth_text}|{reason_text}|{wire_color}".encode()
 
 
 class MutableDetector:
@@ -460,3 +463,86 @@ def test_silent_mode_mutes_positive_chime_but_records_event() -> None:
         assert snapshot.nudge_event["muted"] is True  # visible event, no audio
     finally:
         pipeline.close()
+
+
+# -- root_cause and wire_color_for unit coverage ----------------------------------
+
+
+def test_root_cause_flags_head_clipped_by_top_edge() -> None:
+    pose = make_pose({LEFT_EAR: SimpleLandmark(x=0.46, y=0.05)})
+    score = score_pose(pose, 1.4, ScoringConfig())
+    cause = root_cause(score, 1.4, ScoringConfig(), pose)
+    assert cause == {"title": "top edge clipped", "action": "tilt camera up", "edge": "top"}
+
+
+def test_root_cause_none_for_scored_in_frame_person() -> None:
+    pose = make_pose()
+    score = score_pose(pose, 1.4, ScoringConfig())
+    assert root_cause(score, 1.4, ScoringConfig(), pose) is None
+
+
+def test_root_cause_low_visibility_reason() -> None:
+    pose = make_pose(
+        {LEFT_EAR: SimpleLandmark(x=0.46, y=0.45, visibility=0.1)}
+    )
+    result = score_pose(pose, 1.4, ScoringConfig())
+    assert isinstance(result, Unreliable)
+    cause = root_cause(result, 1.4, ScoringConfig(), pose)
+    assert cause["title"] == "low confidence"
+    assert cause["action"] == "sit facing the camera"
+
+
+def test_root_cause_depth_out_of_band_names_direction() -> None:
+    pose = make_pose()
+    too_far = score_pose(pose, 3.0, ScoringConfig())
+    cause = root_cause(too_far, 3.0, ScoringConfig(), pose)
+    assert cause["title"] == "person too far"
+    assert cause["action"] == "step closer"
+    too_close = score_pose(pose, 0.2, ScoringConfig())
+    cause = root_cause(too_close, 0.2, ScoringConfig(), pose)
+    assert cause["title"] == "person too close"
+    assert cause["action"] == "step back"
+
+
+def test_root_cause_no_pose() -> None:
+    result = score_pose(None, 1.4, ScoringConfig())
+    cause = root_cause(result, 1.4, ScoringConfig(), None)
+    assert cause["title"] == "no person seen"
+    assert cause["edge"] is None
+
+
+def test_root_cause_boundary_check_beats_depth_reason() -> None:
+    pose = make_pose({RIGHT_EAR: SimpleLandmark(x=0.54, y=0.04)})
+    result = score_pose(pose, 3.0, ScoringConfig())
+    cause = root_cause(result, 3.0, ScoringConfig(), pose)
+    assert cause["title"] == "top edge clipped"
+
+
+def test_wire_color_follows_state_before_angles() -> None:
+    slouched = ScoredPosture(
+        head_forward_deg=25.0, trunk_lean_deg=0.0, head_tilt_deg=0.0,
+        shoulder_level_deg=0.0, depth_m=1.4,
+    )
+    upright = replace(slouched, head_forward_deg=2.0)
+    # Confirmed breach outranks the raw angle: crimson, not amber.
+    assert wire_color_for("bad_voice", slouched, ScoringConfig()) == "#ef4444"
+    # Drift: out of band but not yet confirmed.
+    assert wire_color_for("good", slouched, ScoringConfig()) == "#f59e0b"
+    assert wire_color_for("good", upright, ScoringConfig()) == "#10b981"
+    # Untrustworthy frame beats every angle.
+    assert wire_color_for("unreliable", slouched, ScoringConfig()) == "#8b95a3"
+
+
+def test_snapshot_carries_root_cause_and_wire_color() -> None:
+    pose = make_pose({LEFT_EAR: SimpleLandmark(x=0.46, y=0.05)})
+    detector = MutableDetector(pose)
+    pipeline, hub, _ = build_pipeline(detector)
+    pipeline.process_once(make_frame(0))
+    snapshot, _ = hub.latest_metrics()
+    payload = snapshot.to_payload()
+    assert payload["root_cause"]["title"] == "top edge clipped"
+    # Scored frame inside the frame edge with a centered head: no cause.
+    detector.pose = make_pose()
+    pipeline.process_once(make_frame(1))
+    snapshot, _ = hub.latest_metrics()
+    assert snapshot.to_payload()["root_cause"] is None
