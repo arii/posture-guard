@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from posture_guard.config import ScoringConfig
+from posture_guard.config import BaselineDeviationConfig, ScoringConfig
 
 # MediaPipe Pose landmark indices.
 LEFT_EAR = 7
@@ -85,13 +85,20 @@ def low_visibility_detail(landmarks: Sequence[Landmark], cfg: ScoringConfig) -> 
 @dataclass(frozen=True)
 class ScoredPosture:
     """Metrics for one frame. Sign conventions are symmetric: the state
-    machine compares |value| against thresholds."""
+    machine compares |value| against thresholds.
+
+    trunk_lean_available is False when the hips sit below the visibility
+    floor (degraded-feedback mode): the measured trunk angle is garbage, the
+    metric drops out of the BAD decision, and the dashboard reports it as
+    unavailable instead of a number.
+    """
 
     head_forward_deg: float
     trunk_lean_deg: float
     head_tilt_deg: float
     shoulder_level_deg: float
     depth_m: float
+    trunk_lean_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -197,9 +204,10 @@ def score_pose(
 ) -> ScoringResult:
     """Score one frame, or return Unreliable with the blocking reason.
 
-    Gate order is deliberate: no pose and depth-out-of-band map to the
-    no-person state; low visibility and unreadable depth map to the
-    unreliable state (see state.py)."""
+    Gate order is deliberate: a missing pose is the only absence signal (the
+    no-person timer); every other failure — depth unreadable, depth out of
+    band, low visibility — is an unscoreable frame for a person who is
+    visibly present (see state.py)."""
     if landmarks is None:
         return Unreliable(UnreliableReason.NO_POSE)
     if depth_m is None or depth_m <= 0:
@@ -210,8 +218,35 @@ def score_pose(
             f"depth {depth_m:.2f} m outside {cfg.depth_min_m}-{cfg.depth_max_m} m",
         )
     if not visibility_ok(landmarks, cfg):
-        return Unreliable(
-            UnreliableReason.LOW_VISIBILITY, low_visibility_detail(landmarks, cfg)
+        ears_shoulders_ok = all(
+            landmarks[i].visibility >= cfg.visibility_floor
+            for i in (LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER)
+        )
+        if not ears_shoulders_ok:
+            # Ears and shoulders are the minimum usable set: without them no
+            # metric is measurable, so the frame is unscoreable (UNRELIABLE).
+            return Unreliable(
+                UnreliableReason.LOW_VISIBILITY, low_visibility_detail(landmarks, cfg)
+            )
+        hips_ok = all(
+            landmarks[i].visibility >= cfg.visibility_floor for i in (LEFT_HIP, RIGHT_HIP)
+        )
+        if cfg.trunk_lean_required and not hips_ok and not cfg.degraded_feedback:
+            return Unreliable(
+                UnreliableReason.LOW_VISIBILITY, low_visibility_detail(landmarks, cfg)
+            )
+        # Degraded feedback (scoring.degraded_feedback): the person is clearly
+        # tracked, so score the metrics whose landmarks ARE visible (head
+        # forward, head tilt, shoulder level) and drop trunk lean from the
+        # decision — same pattern as trunk-lean-optional mode. Feedback keeps
+        # working in the high-mount framing instead of going silent.
+        return ScoredPosture(
+            head_forward_deg=measure_head_forward(landmarks),
+            trunk_lean_deg=measure_trunk_lean(landmarks),
+            head_tilt_deg=measure_head_tilt(landmarks),
+            shoulder_level_deg=measure_shoulder_level(landmarks),
+            depth_m=depth_m,
+            trunk_lean_available=hips_ok,
         )
     return ScoredPosture(
         head_forward_deg=measure_head_forward(landmarks),
@@ -219,7 +254,27 @@ def score_pose(
         head_tilt_deg=measure_head_tilt(landmarks),
         shoulder_level_deg=measure_shoulder_level(landmarks),
         depth_m=depth_m,
+        trunk_lean_available=all(
+            landmarks[i].visibility >= cfg.visibility_floor
+            for i in (LEFT_HIP, RIGHT_HIP)
+        ),
     )
+
+
+def _metric_threshold_pairs(
+    metrics: ScoredPosture, cfg: ScoringConfig
+) -> list[tuple[float, float]]:
+    """(value, enter threshold) pairs the BAD decision checks. Trunk lean drops
+    out whenever its landmarks are not reliably visible (degraded feedback,
+    or trunk lean optional) so a garbage trunk angle cannot decide the zone."""
+    pairs = [
+        (metrics.head_forward_deg, cfg.head_forward_deg),
+        (metrics.head_tilt_deg, cfg.head_tilt_deg),
+        (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
+    ]
+    if cfg.trunk_lean_required and metrics.trunk_lean_available:
+        pairs.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
+    return pairs
 
 
 def zone_of(metrics: ScoredPosture, cfg: ScoringConfig) -> str:
@@ -228,15 +283,80 @@ def zone_of(metrics: ScoredPosture, cfg: ScoringConfig) -> str:
     Returns "bad" when any metric passes its enter threshold, "good" when all
     metrics are below their exit thresholds, "neutral" in the hysteresis band
     between them."""
-    enter = [
-        (metrics.head_forward_deg, cfg.head_forward_deg),
-        (metrics.head_tilt_deg, cfg.head_tilt_deg),
-        (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
-    ]
-    if cfg.trunk_lean_required:
-        enter.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
-    if any(abs(value) > threshold for value, threshold in enter):
+    pairs = _metric_threshold_pairs(metrics, cfg)
+    if any(abs(value) > threshold for value, threshold in pairs):
         return "bad"
-    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in enter):
+    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in pairs):
+        return "good"
+    return "neutral"
+
+
+class PostureBaseline:
+    """Exponential moving average of each scored angle over ~window_s.
+
+    Tracks the user's own recent neutral so a whole-torso slouch — head and
+    shoulders drifting back together, keeping head-vs-shoulder angles small —
+    still breaches as deviation from the person's neutral. Alpha is dt/window_s
+    (capped at 1), so a 30 fps stream moves the baseline ~0.1% per frame: fast
+    transients leave it untouched while a sustained drift becomes the new
+    reference over several minutes. Fed only scored frames (Unreliable results
+    carry no metrics); resetting re-anchors to the next update.
+    """
+
+    def __init__(self, cfg: BaselineDeviationConfig) -> None:
+        self._window_s = cfg.window_s
+        self._metrics: ScoredPosture | None = None
+        self._last_t: float | None = None
+
+    @property
+    def metrics(self) -> ScoredPosture | None:
+        """Current baseline, or None before the first update."""
+        return self._metrics
+
+    def update(self, metrics: ScoredPosture, now: float) -> None:
+        if self._metrics is None or self._last_t is None:
+            self._metrics = metrics
+            self._last_t = now
+            return
+        alpha = min(1.0, max(0.0, (now - self._last_t) / self._window_s))
+        self._metrics = ScoredPosture(
+            head_forward_deg=self._metrics.head_forward_deg
+            + alpha * (metrics.head_forward_deg - self._metrics.head_forward_deg),
+            trunk_lean_deg=self._metrics.trunk_lean_deg
+            + alpha * (metrics.trunk_lean_deg - self._metrics.trunk_lean_deg),
+            head_tilt_deg=self._metrics.head_tilt_deg
+            + alpha * (metrics.head_tilt_deg - self._metrics.head_tilt_deg),
+            shoulder_level_deg=self._metrics.shoulder_level_deg
+            + alpha * (metrics.shoulder_level_deg - self._metrics.shoulder_level_deg),
+            depth_m=self._metrics.depth_m
+            + alpha * (metrics.depth_m - self._metrics.depth_m),
+        )
+        self._last_t = now
+
+    def reset(self) -> None:
+        self._metrics = None
+        self._last_t = None
+
+
+def deviation_zone(
+    metrics: ScoredPosture, baseline: PostureBaseline, cfg: ScoringConfig
+) -> str:
+    """Classify deviation from the slow baseline, reusing the per-metric bands
+    and the same hysteresis as zone_of. Before any baseline exists there is no
+    reference to deviate from, so the frame reads "good" (zone_of still decides
+    the zone on absolute angles)."""
+    ref = baseline.metrics
+    if ref is None:
+        return "good"
+    pairs = [
+        (metrics.head_forward_deg - ref.head_forward_deg, cfg.head_forward_deg),
+        (metrics.head_tilt_deg - ref.head_tilt_deg, cfg.head_tilt_deg),
+        (metrics.shoulder_level_deg - ref.shoulder_level_deg, cfg.shoulder_level_deg),
+    ]
+    if cfg.trunk_lean_required and metrics.trunk_lean_available:
+        pairs.append((metrics.trunk_lean_deg - ref.trunk_lean_deg, cfg.trunk_lean_deg))
+    if any(abs(value) > threshold for value, threshold in pairs):
+        return "bad"
+    if all(abs(value) < cfg.bad_exit(threshold) for value, threshold in pairs):
         return "good"
     return "neutral"

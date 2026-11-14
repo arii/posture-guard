@@ -4,10 +4,12 @@ Consumes one ScoringResult per frame with an injected timestamp — logic never
 reads the wall clock and never sleeps, so timelines are reproducible in tests.
 States per the spec: NO_PERSON, GOOD, BAD_CHIME, BAD_VOICE, UNRELIABLE.
 
-Mapping of unreliable reasons is deliberate: no pose and depth-out-of-band
-mean "no person to nudge" (they feed the no-person timer); low visibility and
-unreadable depth mean "do not trust this frame" (UNRELIABLE, immediate,
-silent, resets any bad-posture streak so bad data can never escalate).
+Mapping of unreliable reasons is deliberate: no pose detected means "no person
+to nudge" (it feeds the no-person timer); depth out of band, low visibility and
+unreadable depth mean "do not trust this frame" (UNRELIABLE, immediate, silent,
+resets any bad-posture streak so bad data can never escalate). A person whose
+range reading fails the band or whose landmarks fall below the visibility floor
+is present but unscoreable — never reported as absent.
 """
 
 from __future__ import annotations
@@ -18,9 +20,12 @@ from typing import Protocol
 
 from posture_guard.config import FeedbackConfig, ScoringConfig, StateConfig
 from posture_guard.scoring import (
+    PostureBaseline,
+    ScoredPosture,
     ScoringResult,
     Unreliable,
     UnreliableReason,
+    deviation_zone,
     zone_of,
 )
 
@@ -42,7 +47,15 @@ class Nudge(Enum):
     POSITIVE_CHIME = "positive_chime"
 
 
-_ABSENT_REASONS = (UnreliableReason.NO_POSE, UnreliableReason.DEPTH_OUT_OF_BAND)
+_ABSENT_REASONS = (UnreliableReason.NO_POSE,)
+# DEPTH_OUT_OF_BAND is deliberately NOT an absence reason: it can only occur
+# when a pose IS detected (score_pose returns NO_POSE first when landmarks are
+# missing), so the person is visibly present and the center-box depth heuristic
+# merely missed them (high-mount framing puts the box on desk/wall background).
+# Mapping it to absence made the header flap to NO PERSON while the wireframe
+# rendered and metrics showed the last in-band reading. Out-of-band depth with
+# a detected pose is UNRELIABLE — unscoreable frame, placement warning still
+# fires; NO_PERSON means no pose detected, sustained.
 
 
 class VoiceTimings(Protocol):
@@ -61,7 +74,9 @@ class Transition:
 class PostureStateMachine:
     """Temporal smoothing (0.3 s window), hysteresis, and the nudge schedule:
 
-    - chime once after bad posture is confirmed and sustained (default 2 s)
+    - chime once after bad posture is confirmed and sustained (default 2 s);
+      hysteresis applies to the sustain streak too: neutral-band frames do not
+      reset it, only a full smoothing window of good-zone frames does
     - spoken prompt voice_delay_s after the chime if not corrected
     - spoken prompt repeats at most every voice_repeat_cooldown_s
     - GOOD after good_confirm_s of in-threshold posture; recovery from a bad
@@ -79,6 +94,13 @@ class PostureStateMachine:
         self._override = timings_override
         self._positive = positive_chime if positive_chime is not None else FeedbackConfig()
         self._state = PostureState.NO_PERSON
+        # Slow-baseline deviation check (scoring.baseline_deviation): catches
+        # whole-torso slouch that keeps head-vs-shoulder angles small.
+        self._baseline = (
+            PostureBaseline(thresholds.baseline_deviation)
+            if thresholds.baseline_deviation.enabled
+            else None
+        )
         self._history: list[tuple[float, str]] = []  # (t, zone) samples
         self._bad_since: float | None = None
         self._good_since: float | None = None
@@ -98,28 +120,55 @@ class PostureStateMachine:
 
         self._absent_since = None  # person seen and scored
         zone = zone_of(result, self._th)
+        if isinstance(result, ScoredPosture) and self._baseline is not None:
+            # The baseline is a passive reference, not a gate: it samples every
+            # scored frame. The deviation check only widens detection — it never
+            # overrides a raw-angle breach.
+            self._baseline.update(result, now)
+            base_zone = deviation_zone(result, self._baseline, self._th)
+            # Either check decides BAD; GOOD needs both — the deviation check
+            # widens detection, it never overrides a raw-angle breach.
+            if zone == "bad" or base_zone == "bad":
+                zone = "bad"
+            elif zone == "good" and base_zone == "good":
+                zone = "good"
+            else:
+                zone = "neutral"
         self._history.append((now, zone))
         self._prune_history(now)
 
         span = now - self._history[0][0]
+        window_has_good = any(z == "good" for _, z in self._history)
         smoothed_bad = span >= self._t.smoothing_window_s - _EPS and all(
             z == "bad" for _, z in self._history
         )
         smoothed_good = span >= self._t.smoothing_window_s - _EPS and all(
             z == "good" for _, z in self._history
         )
-        if smoothed_bad and self._bad_since is None:
-            self._bad_since = self._history[0][0]
+        # Hysteresis applies to the sustain streak itself, not just the zone:
+        # once a bad streak is counting, neutral-band frames (past the exit
+        # threshold but inside threshold - margin) do NOT reset it — only a
+        # full smoothing window of good-zone frames does. A posture hovering
+        # at its enter threshold (wavering bad/neutral) therefore still
+        # sustains to a chime instead of chattering forever.
+        if self._bad_since is None and not window_has_good:
+            bad_times = [t for t, z in self._history if z == "bad"]
+            if bad_times:
+                self._bad_since = bad_times[0]
         if smoothed_good and self._good_since is None:
             self._good_since = self._history[0][0]
-        if not smoothed_bad and self._bad_since is not None and smoothed_good:
+        if self._bad_since is not None and smoothed_good:
             self._bad_since = None
         if not smoothed_good and self._good_since is not None and smoothed_bad:
             self._good_since = None
+        # The streak sustains while the recent window holds no good-zone frame;
+        # neutral-band frames keep it alive, a good-zone frame pauses the chime
+        # until either the streak resets (smoothed good) or they age out.
+        sustaining_bad = self._bad_since is not None and not window_has_good
 
         if self._state in (PostureState.BAD_CHIME, PostureState.BAD_VOICE):
             return self._update_bad(smoothed_good, now)
-        transition = self._update_idle(smoothed_bad, smoothed_good, now)
+        transition = self._update_idle(sustaining_bad, smoothed_good, now)
         if self._state is PostureState.GOOD and self._positive.positive_chime.enabled:
             return self._maybe_positive_chime(now)
         return transition
@@ -149,6 +198,12 @@ class PostureStateMachine:
     def _enter_no_person(self) -> None:
         self._state = PostureState.NO_PERSON
         self._history.clear()
+        if self._baseline is not None:
+            # A sustained absence likely means a new sitting context (or a new
+            # person); re-calibrate from the next scored frame. Momentary
+            # UNRELIABLE frames deliberately do NOT reset it — one visibility
+            # glitch must not erase minutes of calibration.
+            self._baseline.reset()
         self._bad_since = None
         self._good_since = None
         self._chime_at = None
@@ -163,11 +218,13 @@ class PostureStateMachine:
             return self._override.voice_timings()
         return self._t.voice_delay_s, self._t.voice_repeat_cooldown_s
 
-    def _update_idle(self, smoothed_bad: bool, smoothed_good: bool, now: float) -> Transition:
+    def _update_idle(
+        self, sustaining_bad: bool, smoothed_good: bool, now: float
+    ) -> Transition:
         # Bad is checked first so a slouching person who never sat well still
         # gets nudged instead of waiting forever in NO_PERSON.
         if (
-            smoothed_bad
+            sustaining_bad
             and self._bad_since is not None
             and now - self._bad_since >= self._t.bad_sustain_s - _EPS
         ):

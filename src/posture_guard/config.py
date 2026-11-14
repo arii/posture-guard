@@ -21,6 +21,23 @@ class CameraConfig:
 
 
 @dataclass(frozen=True)
+class BaselineDeviationConfig:
+    """Slow-baseline deviation check (whole-torso slouch gate).
+
+    An exponential moving average of each scored angle over roughly window_s
+    tracks the user's own recent neutral. Deviation thresholds REUSE the
+    per-metric bands (head_forward_deg, trunk_lean_deg, ...): a metric is a
+    deviation breach when |metric - baseline| passes the same threshold the
+    raw metric would use, with the same hysteresis. This catches slouch that
+    keeps head-vs-shoulder angles small (head and shoulders drift together)
+    while an absolute angle change from the person's neutral grows.
+    """
+
+    enabled: bool = True
+    window_s: float = 300.0
+
+
+@dataclass(frozen=True)
 class ScoringConfig:
     """Thresholds and gates for posture scoring.
 
@@ -28,18 +45,27 @@ class ScoringConfig:
     again once |value| falls below (threshold - hysteresis_margin_deg).
     """
 
-    head_forward_deg: float = 12.0
-    trunk_lean_deg: float = 10.0
-    head_tilt_deg: float = 12.0
-    shoulder_level_deg: float = 6.0
+    head_forward_deg: float = 8.0
+    trunk_lean_deg: float = 7.0
+    head_tilt_deg: float = 8.0
+    shoulder_level_deg: float = 4.0
     hysteresis_margin_deg: float = 3.0
     visibility_floor: float = 0.5
     depth_min_m: float = 0.6
     depth_max_m: float = 2.5
+    baseline_deviation: BaselineDeviationConfig = field(
+        default_factory=BaselineDeviationConfig
+    )
     # High-mount framing can keep hips permanently below the visibility floor;
     # set false to score ears/shoulders only (trunk lean drops out of the BAD
     # decision and reports unavailable) so head-forward reminders still fire.
     trunk_lean_required: bool = True
+    # Degraded feedback: when trunk lean is required but only the hips fall
+    # below the visibility floor, still score the ears/shoulders metrics (head
+    # forward, head tilt, shoulder level) and report trunk lean as unavailable,
+    # instead of gating all feedback. Ears or shoulders below the floor always
+    # gates — they are the minimum usable set.
+    degraded_feedback: bool = True
 
     def bad_exit(self, enter_threshold: float) -> float:
         """Exit threshold for a metric, per the hysteresis margin."""

@@ -132,18 +132,6 @@ def placement_warnings(
     return tuple(warnings)
 
 
-def _hips_below_floor(
-    landmarks: Sequence[Landmark] | None, cfg: ScoringConfig
-) -> bool:
-    """True when either hip landmark sits below the visibility floor."""
-    if landmarks is None:
-        return False
-    return any(
-        landmarks[i].visibility < cfg.visibility_floor
-        for i in (LEFT_HIP, RIGHT_HIP)
-    )
-
-
 def _audio_fields(audio: NudgeSink | None) -> dict[str, object]:
     """AudioWorker.status fields for the snapshot; stubs without a status
     property report the audio worker as not ready."""
@@ -261,12 +249,9 @@ class PosturePipeline:
         angles: ScoredPosture | None = result if isinstance(result, ScoredPosture) else None
         trunk_deg = angles.trunk_lean_deg if angles else None
         trunk_note: str | None = None
-        if (
-            angles is not None
-            and not self._config.scoring.trunk_lean_required
-            and _hips_below_floor(detection.landmarks, self._config.scoring)
-        ):
-            # Trunk lean optional + hips invisible: the measured angle is
+        if angles is not None and not angles.trunk_lean_available:
+            # Trunk lean unavailable (hips below the visibility floor, in either
+            # the optional or degraded-feedback mode): the measured angle is
             # garbage, so report it as unavailable instead of a number.
             trunk_deg = None
             trunk_note = "\u2014 trunk lean unavailable (hips not visible)"

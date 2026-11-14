@@ -9,7 +9,7 @@ import math
 import pytest
 
 from conftest import GOOD_ANGLES, SLOUCHED_ANGLES, make_pose, mirror_x
-from posture_guard.config import ScoringConfig
+from posture_guard.config import BaselineDeviationConfig, ScoringConfig
 from posture_guard.scoring import (
     LEFT_EAR,
     LEFT_HIP,
@@ -17,10 +17,12 @@ from posture_guard.scoring import (
     RIGHT_EAR,
     RIGHT_HIP,
     RIGHT_SHOULDER,
+    PostureBaseline,
     ScoredPosture,
     SimpleLandmark,
     Unreliable,
     UnreliableReason,
+    deviation_zone,
     low_visibility_detail,
     measure_head_forward,
     measure_head_tilt,
@@ -52,7 +54,10 @@ class TestTrunkLeanOptional:
         result = score_pose(pose, 1.4, cfg)
         assert isinstance(result, ScoredPosture)  # not UNRELIABLE low_visibility
 
-    def test_hidden_hips_block_scoring_when_flag_defaults_true(self):
+    def test_hidden_hips_score_in_degraded_mode_by_default(self):
+        """scoring.degraded_feedback (default true): hips below the floor no
+        longer gate all feedback — the ears/shoulders metrics still score and
+        trunk lean reports unavailable."""
         pose = make_pose(
             {
                 LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.3),
@@ -60,6 +65,19 @@ class TestTrunkLeanOptional:
             }
         )
         result = score_pose(pose, 1.4, ScoringConfig())
+        assert isinstance(result, ScoredPosture)
+        assert result.trunk_lean_available is False
+
+    def test_hidden_hips_block_scoring_when_degraded_feedback_off(self):
+        """Flag off restores the previous gating entirely."""
+        pose = make_pose(
+            {
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.3),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.3),
+            }
+        )
+        cfg = ScoringConfig(degraded_feedback=False)
+        result = score_pose(pose, 1.4, cfg)
         assert result == Unreliable(
             UnreliableReason.LOW_VISIBILITY,
             "hips not visible (left 0.30, right 0.30) - trunk lean unavailable",
@@ -253,7 +271,7 @@ class TestScorePoseGates:
                 RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.28),
             }
         )
-        result = score_pose(pose, depth_m=1.4, cfg=CFG)
+        result = score_pose(pose, depth_m=1.4, cfg=ScoringConfig(degraded_feedback=False))
         assert result.reason == UnreliableReason.LOW_VISIBILITY
         assert result.detail == (
             "hips not visible (left 0.31, right 0.28) - trunk lean unavailable"
@@ -306,9 +324,10 @@ class TestZoneOf:
         assert zone_of(score_pose(slouched_pose, 1.4, CFG), CFG) == "bad"
 
     def test_hysteresis_band_is_neutral(self, uneven_shoulders_pose):
-        # Shoulder level ~5.7 deg: past the exit threshold (6 - 3 = 3) but
-        # below the enter threshold (6) — exactly the hysteresis band.
-        assert zone_of(score_pose(uneven_shoulders_pose, 1.4, CFG), CFG) == "neutral"
+        # Shoulder level ~5.71 deg: past the exit threshold (8 - 3 = 5) but
+        # below the enter threshold (8) — exactly the hysteresis band.
+        cfg = ScoringConfig(shoulder_level_deg=8.0)
+        assert zone_of(score_pose(uneven_shoulders_pose, 1.4, cfg), cfg) == "neutral"
 
     def test_identical_metric_values_all_checked(self):
         # Regression: value/threshold pairs must not collapse on dict keys.
@@ -320,3 +339,165 @@ class TestZoneOf:
             depth_m=1.4,
         )
         assert zone_of(metrics, CFG) == "bad"
+
+
+class TestBaselineDeviation:
+    """Slow-baseline deviation check: an EMA (~5 min) of each angle tracks the
+    user's own recent neutral, so whole-torso slouch that keeps head-vs-shoulder
+    angles small still breaches as deviation from that neutral."""
+
+    @staticmethod
+    def _metrics(head_forward=0.0, trunk=0.0, tilt=0.0, shoulder=0.0) -> ScoredPosture:
+        return ScoredPosture(
+            head_forward_deg=head_forward,
+            trunk_lean_deg=trunk,
+            head_tilt_deg=tilt,
+            shoulder_level_deg=shoulder,
+            depth_m=1.4,
+        )
+
+    def test_baseline_anchors_to_first_frame(self):
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        assert baseline.metrics is None
+        baseline.update(self._metrics(head_forward=-2.0), 0.0)
+        assert baseline.metrics is not None
+        assert baseline.metrics.head_forward_deg == pytest.approx(-2.0)
+
+    def test_steady_pose_is_no_deviation(self):
+        """A person whose natural neutral is -2 degrees never deviates while
+        sitting there — even though zone_of alone would call it good."""
+        cfg = ScoringConfig()
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        for i in range(300):
+            baseline.update(self._metrics(head_forward=-2.0), i * 0.1)
+        zone = deviation_zone(self._metrics(head_forward=-2.0), baseline, cfg)
+        assert zone == "good"
+
+    def test_sustained_drift_beyond_baseline_breaches(self):
+        """Neutral calibrated at -2 deg; the user drifts to +7 deg. The raw
+        angle is still inside the 8 deg band (zone_of: good) but the 9 deg
+        swing from their own neutral breaches."""
+        cfg = ScoringConfig()
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        for i in range(300):
+            baseline.update(self._metrics(head_forward=-2.0), i * 0.1)
+        drifted = self._metrics(head_forward=7.0)
+        # Raw check alone cannot reach BAD: 7 deg sits inside the 8 deg band.
+        assert zone_of(drifted, cfg) != "bad"
+        assert deviation_zone(drifted, baseline, cfg) == "bad"
+
+    def test_deviation_uses_same_hysteresis_band(self):
+        cfg = ScoringConfig()
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        baseline.update(self._metrics(), 0.0)
+        # 5.5 deg off the baseline: past the exit threshold (8 - 3 = 5), below
+        # the enter threshold (8) — neutral, exactly like zone_of.
+        assert deviation_zone(self._metrics(head_forward=5.5), baseline, cfg) == "neutral"
+
+    def test_fast_transient_noise_does_not_breach(self):
+        """A brief spike barely moves the EMA and never deviates."""
+        cfg = ScoringConfig()
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        for i in range(600):
+            baseline.update(self._metrics(), i * 0.1)
+        for j in range(3):  # 0.3 s of noise
+            baseline.update(self._metrics(head_forward=30.0), 60.0 + j * 0.1)
+        assert baseline.metrics is not None
+        assert baseline.metrics.head_forward_deg < 1.0  # EMA barely moved
+        assert deviation_zone(self._metrics(), baseline, cfg) == "good"
+
+    def test_window_time_constant(self):
+        """A constant offset converges to ~1 - 1/e of itself over window_s.
+        Baseline is anchored on the first update, so hold a zero neutral first."""
+        window_s = 300.0
+        baseline = PostureBaseline(BaselineDeviationConfig(window_s=window_s))
+        for i in range(300):  # 30 s of neutral anchors the baseline at 0
+            baseline.update(self._metrics(), i * 0.1)
+        for i in range(3001):  # window_s of 30 deg drift
+            baseline.update(self._metrics(head_forward=30.0), 30.0 + i * 0.1)
+        assert baseline.metrics is not None
+        assert baseline.metrics.head_forward_deg == pytest.approx(
+            30.0 * (1 - math.exp(-1)), rel=0.01
+        )
+
+    def test_reset_reanchors_on_next_update(self):
+        baseline = PostureBaseline(BaselineDeviationConfig())
+        baseline.update(self._metrics(head_forward=-2.0), 0.0)
+        baseline.reset()
+        assert baseline.metrics is None
+        baseline.update(self._metrics(head_forward=5.0), 1.0)
+        assert baseline.metrics is not None
+        assert baseline.metrics.head_forward_deg == pytest.approx(5.0)
+
+
+class TestDegradedFeedback:
+    """scoring.degraded_feedback: UNRELIABLE only blocks feedback when the
+    minimum usable set (ears AND shoulders) is not trackable. With ears and
+    shoulders above the floor, the metrics they measure (head forward, head
+    tilt, shoulder level) still score and trunk lean drops out of the
+    decision — same pattern as trunk-lean-optional mode."""
+
+    HIDDEN_HIPS = {
+        LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.2),
+        RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.2),
+    }
+
+    def test_partial_visibility_reaches_bad_through_head_metrics(self):
+        """Hips hidden, head slouched forward: the pose reaches BAD on the
+        still-measurable head-forward metric (trunk lean is unavailable and
+        excluded, and the garbage measured trunk angle cannot veto it)."""
+        cfg = ScoringConfig()
+        pose = make_pose(
+            {
+                **self.HIDDEN_HIPS,
+                LEFT_EAR: SimpleLandmark(x=0.48, y=0.54),
+                RIGHT_EAR: SimpleLandmark(x=0.56, y=0.54),
+            }
+        )
+        scored = score_pose(pose, 1.4, cfg)
+        assert isinstance(scored, ScoredPosture)
+        assert scored.trunk_lean_available is False
+        assert zone_of(scored, cfg) == "bad"
+
+    def test_hidden_hip_garbage_angle_cannot_decide_the_zone(self):
+        """Hips hidden: the measured trunk angle is garbage (hips at frame
+        corners) but must not make the zone BAD on its own."""
+        cfg = ScoringConfig()
+        pose = make_pose(
+            {
+                **self.HIDDEN_HIPS,
+                LEFT_HIP: SimpleLandmark(x=0.05, y=0.95, visibility=0.2),
+                RIGHT_HIP: SimpleLandmark(x=0.95, y=0.05, visibility=0.2),
+            }
+        )
+        scored = score_pose(pose, 1.4, cfg)
+        assert isinstance(scored, ScoredPosture)
+        assert zone_of(scored, cfg) == "good"
+
+    def test_ears_below_floor_still_gates(self):
+        """Ears are half of the minimum usable set: below the floor the frame
+        is unscoreable even with degraded feedback on."""
+        cfg = ScoringConfig()
+        pose = make_pose(
+            {
+                **self.HIDDEN_HIPS,
+                LEFT_EAR: SimpleLandmark(x=0.46, y=0.45, visibility=0.2),
+            }
+        )
+        result = score_pose(pose, 1.4, cfg)
+        assert result == Unreliable(
+            UnreliableReason.LOW_VISIBILITY,
+            "ears not visible (left 0.20); hips not visible (left 0.20, right 0.20)"
+            " - trunk lean unavailable",
+        )
+
+    def test_shoulders_below_floor_still_gates(self):
+        cfg = ScoringConfig()
+        pose = make_pose(
+            {
+                LEFT_SHOULDER: SimpleLandmark(x=0.40, y=0.60, visibility=0.3),
+            }
+        )
+        result = score_pose(pose, 1.4, cfg)
+        assert isinstance(result, Unreliable)
+        assert result.reason is UnreliableReason.LOW_VISIBILITY

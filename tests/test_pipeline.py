@@ -151,14 +151,19 @@ def test_full_nudge_timeline_chime_then_voice_then_recovery() -> None:
     assert audio.enqueued == [Nudge.CHIME, Nudge.VOICE]  # silence on recovery
 
 
-def test_out_of_band_depth_surfaces_as_warning_and_no_person() -> None:
+def test_out_of_band_depth_surfaces_as_warning_not_no_person() -> None:
+    """Regression (NO PERSON flap): the pose is detected, so a center-box
+    depth reading outside the band is an unscoreable frame for a present
+    person — placement warning fires, the header never reports NO PERSON.
+    Previously this flapped the header to no_person while the wireframe
+    rendered and the metrics showed the last in-band reading."""
     detector = MutableDetector(make_pose(), depth_m=2.9)  # beyond 2.5 m band
     pipeline, hub, _ = build_pipeline(detector)
 
     feed(pipeline, detector, 3.0, 0)
 
     snapshot, _ = hub.latest_metrics()
-    assert snapshot.state == "no_person"
+    assert snapshot.state == "unreliable"
     assert snapshot.head_forward_deg is None
     assert snapshot.warnings == ("person too far - 2.9 m (band 0.6-2.5 m)",)
 

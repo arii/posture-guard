@@ -26,7 +26,13 @@
   .badge.good       { background: var(--good); color: #0b2412; }
   .badge.bad_chime,
   .badge.bad_voice  { background: var(--warn); color: #3a2503; }
-  .badge.unreliable { background: var(--bad); color: #3a0b0b; }
+  /* Demoted (demo feedback): tracking status is a small amber pill, not the
+     alarming full-size red badge, and the video carries no banner at all —
+     the detail lives in the reliability line below the metrics. */
+  .badge.unreliable {
+    background: var(--warn); color: #3a2503; font-size: 11px;
+    padding: 2px 10px; text-transform: none; letter-spacing: 0.03em;
+  }
   .badge.no_person  { background: #3a4250; color: var(--text); }
   /* Synchronized nudge event: the badge flashes once in the channel's color. */
   @keyframes nudge-pulse {
@@ -377,7 +383,11 @@ function reminderLabel(event) {
 }
 
 function apply(payload) {
-  badge.textContent = payload.state.replace(/_/g, " ");
+  // Demoted: unreliable tracking reads as a small amber "tracking partial"
+  // pill instead of a big red state badge; the missing-landmark reason stays
+  // in the reliability line below the metrics.
+  badge.textContent =
+    payload.state === "unreliable" ? "tracking partial" : payload.state.replace(/_/g, " ");
   badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
   document.getElementById("fps").textContent = payload.fps;
   document.getElementById("depth").textContent =
