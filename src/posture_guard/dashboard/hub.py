@@ -28,8 +28,11 @@ class ScoringThresholds:
     shoulder_level_deg: float
     hysteresis_margin_deg: float
     visibility_floor: float
+    # False in trunk-lean-optional mode: the needle must skip trunk lean like
+    # the scoring zone does, or the gauge and the zones disagree.
+    trunk_lean_required: bool = True
 
-    def to_payload(self) -> dict[str, float]:
+    def to_payload(self) -> dict[str, float | bool]:
         return {
             "head_forward_deg": self.head_forward_deg,
             "trunk_lean_deg": self.trunk_lean_deg,
@@ -37,6 +40,7 @@ class ScoringThresholds:
             "shoulder_level_deg": self.shoulder_level_deg,
             "hysteresis_margin_deg": self.hysteresis_margin_deg,
             "visibility_floor": self.visibility_floor,
+            "trunk_lean_required": self.trunk_lean_required,
         }
 
 
@@ -66,6 +70,15 @@ class MetricsSnapshot:
     trunk_note: str | None = None  # set when trunk lean is measured as unavailable
     feedback: dict[str, object] | None = None  # RuntimeFeedback.to_payload()
     nudge_event: dict[str, object] | None = None  # {"kind": "chime"|"voice", "seq": n}
+    # Static state timings (bad_sustain_s, good_confirm_s, positive_every_s,
+    # positive_enabled) so the hold-bar countdowns render from config instead
+    # of hardcoded seconds.
+    timings: dict[str, float | bool] | None = None
+    # Live streak lengths (s) from the state machine: the hold bar divides
+    # these by the timings above, so it can only reach "triggering" when the
+    # backend actually fires. None when no streak is running.
+    bad_streak_s: float | None = None
+    good_streak_s: float | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -98,6 +111,9 @@ class MetricsSnapshot:
             "trunk_note": self.trunk_note,
             "feedback": self.feedback,
             "nudge_event": self.nudge_event,
+            "timings": dict(self.timings) if self.timings is not None else None,
+            "bad_streak_s": _round_or_none(self.bad_streak_s),
+            "good_streak_s": _round_or_none(self.good_streak_s),
         }
 
 

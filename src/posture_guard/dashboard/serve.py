@@ -65,7 +65,14 @@ def main(argv: list[str] | None = None) -> None:
     feedback = RuntimeFeedback.from_config(config)  # one object shared by pipeline + API
 
     audio = AudioWorker(config.audio)
-    audio.start()
+    audio_status = audio.start()
+    logger.info(
+        "audio status: ready=%s sink=%s tts=%s%s",
+        audio_status.ready,
+        audio_status.sink or "default",
+        audio_status.tts_backend or "none",
+        f" error={audio_status.error}" if audio_status.error else "",
+    )
 
     pipeline = PosturePipeline(
         build_source(config), config, hub=hub, audio=audio, feedback=feedback

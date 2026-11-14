@@ -8,30 +8,32 @@ camera:
 scoring:
   # A metric is "bad" when its absolute value passes the threshold.
   # Hysteresis: it only counts as "good" again once it falls back below
-  # (threshold - hysteresis_margin_deg).
-  head_forward_deg: 12.0
-  trunk_lean_deg: 10.0
-  head_tilt_deg: 12.0
-  shoulder_level_deg: 6.0
-  hysteresis_margin_deg: 3.0
-  # MediaPipe landmark visibility must clear this floor for a score to be trusted.
-  visibility_floor: 0.5
-  # High-mount framing (camera well above head height) can keep hips out of
-  # frame at working distance. Set false to require only ears and shoulders:
-  # trunk lean then reports "unavailable" and drops out of the BAD decision,
+  # (threshold - hysteresis_margin_deg). The needle's green/amber/red bands
+  # are anchored to these same exit/enter lines, so the gauge color always
+  # agrees with the good/ok/bad zone (demo tuning: between the original
+  # 12/6 + 3.0 and the over-tight 7/3.5 + 1.5 that trapped posture in neutral).
+  head_forward_deg: 9.0
+  trunk_lean_deg: 9.0
+  head_tilt_deg: 9.0
+  shoulder_level_deg: 5.0
+  hysteresis_margin_deg: 2.0
+  # MediaPipe landmark visibility floor: set to 0.0 for demos so hidden hips
+  # or lighting variations never trigger UNRELIABLE.
+  visibility_floor: 0.0
+  # Set false to require only ears and shoulders: trunk lean reports unavailable
   # but head-forward / head-tilt / shoulder-level reminders still fire.
-  trunk_lean_required: true
-  # Depth gate: person must sit inside this band (meters) to be scored.
-  depth_min_m: 0.6
-  depth_max_m: 2.5
+  trunk_lean_required: false
+  # Depth gate: 0.0 to 10.0 disables depth gating so sitting distance never blocks scoring.
+  depth_min_m: 0.0
+  depth_max_m: 10.0
 
 state:
   smoothing_window_s: 0.3     # temporal smoothing over the last 0.3 s of samples
-  bad_sustain_s: 2.0          # chime after bad posture is confirmed this long
-  good_confirm_s: 1.0         # in thresholds this long -> state GOOD
-  recovery_good_s: 3.0        # good this long after a chime -> back to GOOD
-  voice_delay_s: 10.0         # spoken prompt this long after the chime
-  voice_repeat_cooldown_s: 30.0  # minimum spacing between spoken prompts
+  bad_sustain_s: 1.0          # chime after bad posture is confirmed 1.0 s
+  good_confirm_s: 1.5         # hold good posture 1.5 s to confirm state GOOD
+  recovery_good_s: 2.5        # hold good 2.5 s after a chime -> back to GOOD
+  voice_delay_s: 3.0          # spoken prompt this long after the chime
+  voice_repeat_cooldown_s: 5.0  # minimum spacing between spoken prompts
   no_person_timeout_s: 2.0    # no pose / out of depth band this long -> NO_PERSON
 
 audio:
@@ -43,5 +45,5 @@ audio:
 feedback:
   positive_chime:
     enabled: true        # reward sustained good posture with an upbeat chime
-    every_seconds: 120   # fire at most this often while posture stays GOOD
+    every_seconds: 30    # fire at most this often while posture stays GOOD (demo pace)
 

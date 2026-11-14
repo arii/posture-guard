@@ -91,7 +91,11 @@ class ScoredPosture:
     trunk_lean_deg: float
     head_tilt_deg: float
     shoulder_level_deg: float
-    depth_m: float
+    depth_m: float | None = None
+    # False when either hip is below the visibility floor: the trunk angle is
+    # untrustworthy and drops out of the zone decision (trunk-lean-optional
+    # mode scores the frame anyway on ears/shoulders).
+    trunk_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -202,23 +206,28 @@ def score_pose(
     unreliable state (see state.py)."""
     if landmarks is None:
         return Unreliable(UnreliableReason.NO_POSE)
-    if depth_m is None or depth_m <= 0:
-        return Unreliable(UnreliableReason.DEPTH_UNREADABLE)
-    if not (cfg.depth_min_m <= depth_m <= cfg.depth_max_m):
-        return Unreliable(
-            UnreliableReason.DEPTH_OUT_OF_BAND,
-            f"depth {depth_m:.2f} m outside {cfg.depth_min_m}-{cfg.depth_max_m} m",
-        )
+    if cfg.depth_min_m > 0:
+        if depth_m is None or depth_m <= 0:
+            return Unreliable(UnreliableReason.DEPTH_UNREADABLE)
+        if not (cfg.depth_min_m <= depth_m <= cfg.depth_max_m):
+            return Unreliable(
+                UnreliableReason.DEPTH_OUT_OF_BAND,
+                f"depth {depth_m:.2f} m outside {cfg.depth_min_m}-{cfg.depth_max_m} m",
+            )
     if not visibility_ok(landmarks, cfg):
         return Unreliable(
             UnreliableReason.LOW_VISIBILITY, low_visibility_detail(landmarks, cfg)
         )
+    trunk_available = all(
+        landmarks[i].visibility >= cfg.visibility_floor for i in (LEFT_HIP, RIGHT_HIP)
+    )
     return ScoredPosture(
         head_forward_deg=measure_head_forward(landmarks),
         trunk_lean_deg=measure_trunk_lean(landmarks),
         head_tilt_deg=measure_head_tilt(landmarks),
         shoulder_level_deg=measure_shoulder_level(landmarks),
         depth_m=depth_m,
+        trunk_available=trunk_available,
     )
 
 
@@ -227,13 +236,15 @@ def zone_of(metrics: ScoredPosture, cfg: ScoringConfig) -> str:
 
     Returns "bad" when any metric passes its enter threshold, "good" when all
     metrics are below their exit thresholds, "neutral" in the hysteresis band
-    between them."""
+    between them. Trunk lean counts whenever its angle is trustworthy (hips
+    visible); trunk_lean_required only decides whether hidden hips block
+    scoring entirely or just drop trunk from this decision."""
     enter = [
         (metrics.head_forward_deg, cfg.head_forward_deg),
         (metrics.head_tilt_deg, cfg.head_tilt_deg),
         (metrics.shoulder_level_deg, cfg.shoulder_level_deg),
     ]
-    if cfg.trunk_lean_required:
+    if cfg.trunk_lean_required or metrics.trunk_available:
         enter.append((metrics.trunk_lean_deg, cfg.trunk_lean_deg))
     if any(abs(value) > threshold for value, threshold in enter):
         return "bad"

@@ -92,6 +92,15 @@ class PostureStateMachine:
     def state(self) -> PostureState:
         return self._state
 
+    def streaks(self, now: float) -> tuple[float | None, float | None]:
+        """(bad_streak_s, good_streak_s): live streak lengths for the dashboard
+        hold bar. Same clocks the fire conditions compare, so the bar reaches
+        100% exactly when update() fires — the button can never show
+        "triggering" with no sound again. None when no streak is running."""
+        bad = None if self._bad_since is None else max(0.0, now - self._bad_since)
+        good = None if self._good_since is None else max(0.0, now - self._good_since)
+        return bad, good
+
     def update(self, result: ScoringResult, now: float) -> Transition:
         if isinstance(result, Unreliable):
             return self._on_unreliable(result, now)
@@ -110,7 +119,10 @@ class PostureStateMachine:
         )
         if smoothed_bad and self._bad_since is None:
             self._bad_since = self._history[0][0]
-        if smoothed_good and self._good_since is None:
+        if (
+            (smoothed_good or (self._state is PostureState.NO_PERSON and not smoothed_bad))
+            and self._good_since is None
+        ):
             self._good_since = self._history[0][0]
         if not smoothed_bad and self._bad_since is not None and smoothed_good:
             self._bad_since = None
@@ -177,8 +189,11 @@ class PostureStateMachine:
             self._voice_at = None
             self._good_state_since = None
             return Transition(PostureState.BAD_CHIME, Nudge.CHIME, seconds_bad)
+        can_confirm_good = smoothed_good or (
+            self._state is PostureState.NO_PERSON and not smoothed_bad
+        )
         if (
-            smoothed_good
+            can_confirm_good
             and self._good_since is not None
             and now - self._good_since >= self._t.good_confirm_s - _EPS
         ):

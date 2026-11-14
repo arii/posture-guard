@@ -123,6 +123,17 @@ class AudioWorker:
         """Pre-render prompts, resolve the sink, and start the playback thread."""
         self._render_sounds()
         self._sink = self._config.sink or self._discover_usb_sink()
+        if Nudge.VOICE not in self._sounds:
+            logger.warning(
+                "voice prompt unavailable (%s) - reminders are chime-only",
+                self._error or "no TTS backend",
+            )
+        else:
+            logger.info(
+                "audio ready (sink %s, tts %s)",
+                self._sink or "default",
+                self._tts_backend,
+            )
         self._thread = threading.Thread(
             target=self._playback_loop, name="audio-worker", daemon=True
         )
@@ -151,9 +162,13 @@ class AudioWorker:
         with self._sounds_lock:
             path = self._sounds.get(nudge)
         if path is None:
-            return  # nothing rendered for this nudge (e.g. no TTS backend)
+            # Nothing rendered for this nudge (e.g. voice with no TTS backend):
+            # loud by design, so a silent speaker is diagnosable from the log.
+            logger.warning("dropping %s: no sound rendered for it", nudge.value)
+            return
         with self._pending_lock:
             if not force and nudge in self._pending:
+                logger.debug("dropping duplicate pending %s", nudge.value)
                 return
             self._pending.add(nudge)
         self._queue.put((nudge, path))

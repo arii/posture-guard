@@ -329,3 +329,11 @@ class TestUnreliableAndAbsent:
         transitions = run(sm, grid(8.1, 12.0, 0.1, GOOD))
         assert transitions[-1].state is PostureState.GOOD
         assert all(tr.nudge is not Nudge.CHIME for tr in transitions)
+
+    def test_neutral_posture_from_no_person_transitions_to_good(self):
+        """A person sitting down in neutral posture (within enter thresholds)
+        must transition to GOOD and not get trapped in NO_PERSON."""
+        neutral = score_pose(make_pose({RIGHT_SHOULDER: SimpleLandmark(x=0.60, y=0.62)}), 1.4, CFG)
+        sm = PostureStateMachine(TIMINGS, CFG)
+        transitions = run(sm, grid(0.0, 2.0, 0.1, neutral))
+        assert transitions[-1].state is PostureState.GOOD

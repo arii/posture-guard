@@ -10,6 +10,7 @@ injectable: detector, renderer, audio sink and hub are constructor parameters.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -37,6 +38,8 @@ from posture_guard.scoring import (
     score_pose,
 )
 from posture_guard.state import Nudge, PostureState, PostureStateMachine, Transition
+
+logger = logging.getLogger(__name__)
 
 
 class NudgeSink(Protocol):
@@ -195,7 +198,14 @@ class PosturePipeline:
             shoulder_level_deg=config.scoring.shoulder_level_deg,
             hysteresis_margin_deg=config.scoring.hysteresis_margin_deg,
             visibility_floor=config.scoring.visibility_floor,
+            trunk_lean_required=config.scoring.trunk_lean_required,
         )
+        self._timings: dict[str, float | bool] = {
+            "bad_sustain_s": config.state.bad_sustain_s,
+            "good_confirm_s": config.state.good_confirm_s,
+            "positive_every_s": config.feedback.positive_chime.every_seconds,
+            "positive_enabled": config.feedback.positive_chime.enabled,
+        }
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fps = 0.0
@@ -212,14 +222,37 @@ class PosturePipeline:
         state-machine timelines reproducible in tests."""
         detection = self._detector(frame)
         result = score_pose(detection.landmarks, detection.depth_m, self._config.scoring)
+        previous = self._state_machine.state
         transition = self._state_machine.update(result, frame.timestamp_s)
+        if transition.state is not previous:
+            logger.info(
+                "posture state: %s -> %s", previous.value, transition.state.value
+            )
         if transition.nudge is not Nudge.NONE:
             # Mode filter is the single enforcement point (spec): the machine
             # keeps sole emission authority; silent/chime-only drop the audio
             # here while state logic advances identically.
             allowed = self._feedback is None or self._feedback.allows(transition.nudge)
+            mode = (
+                self._feedback.to_payload()["mode"]
+                if self._feedback is not None
+                else "always"
+            )
             if allowed and self._audio is not None:
                 self._audio.enqueue(transition.nudge)
+                logger.info("nudge %s (mode %s): queued", transition.nudge.value, mode)
+            else:
+                reason = (
+                    "no audio sink wired"
+                    if self._audio is None
+                    else f"muted by mode {mode}"
+                )
+                logger.info(
+                    "nudge %s (mode %s): NOT played (%s)",
+                    transition.nudge.value,
+                    mode,
+                    reason,
+                )
             self._nudge_event = self._emit_nudge_event(transition.nudge, allowed)
         self._update_fps(frame.timestamp_s)
         if self._hub is not None:
@@ -272,6 +305,7 @@ class PosturePipeline:
             trunk_note = "\u2014 trunk lean unavailable (hips not visible)"
         camera = self._source.status
         depth_m = detection.depth_m
+        bad_streak_s, good_streak_s = self._state_machine.streaks(frame.timestamp_s)
         snapshot = MetricsSnapshot(
             state=state.value,
             fps=self._fps,
@@ -304,6 +338,9 @@ class PosturePipeline:
                 else None
             ),
             nudge_event=self._nudge_event,
+            timings=self._timings,
+            bad_streak_s=bad_streak_s,
+            good_streak_s=good_streak_s,
         )
         self._hub.publish_metrics(snapshot)
         state_text = state.value.replace("_", " ")

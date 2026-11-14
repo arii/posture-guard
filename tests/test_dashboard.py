@@ -205,6 +205,7 @@ def test_ws_pushes_metrics_json_schema() -> None:
         "shoulder_level_deg": 6.0,
         "hysteresis_margin_deg": 3.0,
         "visibility_floor": 0.5,
+        "trunk_lean_required": True,
     }
     assert payload["camera"] == {
         "connected": True,

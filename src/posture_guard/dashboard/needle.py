@@ -3,11 +3,28 @@
 Display-only: mirrors the client-side computation in index.html so the
 aggregation is importable and unit-testable in Python (tests/test_needle.py).
 No changes to scoring or the state machine.
+
+The score tracks the WORST metric's severity, mapped onto the gauge so the
+needle color always agrees with the scoring zone (scoring.zone_of): green is
+good, amber is the ok/neutral hysteresis band, red is bad (past a threshold).
+A mean would disagree in both directions (one maxed metric reads green while
+the chime fires; every metric at 95% reads red while silent), so the mean is
+deliberately not used here.
 """
 
 from __future__ import annotations
 
 Metrics = dict[str, float | None]
+
+# Gauge thirds: below GOOD_END is green, below BAD_START is amber, at or above
+# BAD_START is red. The mapping anchors the worst metric's exit fraction to
+# GOOD_END and its enter threshold (severity 1) to BAD_START.
+GOOD_END = 100.0 / 3.0
+BAD_START = 200.0 / 3.0
+
+TRUNK_KEY = "trunk_lean_deg"
+MARGIN_KEY = "hysteresis_margin_deg"
+TRUNK_REQUIRED_KEY = "trunk_lean_required"
 
 
 def metric_severity(value: float | None, threshold: float | None) -> float | None:
@@ -22,20 +39,44 @@ def metric_severity(value: float | None, threshold: float | None) -> float | Non
 
 
 def composite_score(
-    metrics: Metrics, thresholds: dict[str, float] | None
+    metrics: Metrics, thresholds: dict[str, float | bool] | None
 ) -> float | None:
-    """Aggregate metrics to 0-100: 0 = centered in all bands, 100 = at/over.
+    """Needle position 0-100 from the worst metric's severity.
 
-    Unavailable metrics are skipped; returns None when nothing is usable
-    (no person, or no thresholds received yet).
+    The worst metric's exit fraction (its threshold minus the hysteresis
+    margin) maps to GOOD_END and severity 1 maps to BAD_START; past the
+    threshold the red zone fills up to 2x severity. Trunk lean is skipped when
+    it is unavailable (None) or when trunk_lean_required is false, exactly like
+    the scoring zone. Returns None when nothing is usable (no person, or no
+    thresholds received yet).
     """
     if not thresholds:
         return None
-    severities = [
-        severity
-        for key, value in metrics.items()
-        if (severity := metric_severity(value, thresholds.get(key))) is not None
-    ]
-    if not severities:
+    margin = thresholds.get(MARGIN_KEY, 0.0)
+    margin_deg = float(margin) if isinstance(margin, (int, float)) else 0.0
+    trunk_required = thresholds.get(TRUNK_REQUIRED_KEY, True)
+    worst: tuple[float, float] | None = None  # (severity, exit_fraction)
+    for key, value in metrics.items():
+        if value is None:
+            continue
+        if key == TRUNK_KEY and trunk_required is False:
+            continue
+        threshold = thresholds.get(key)
+        if not isinstance(threshold, (int, float)) or threshold <= 0:
+            continue
+        band = float(threshold)
+        severity = abs(value) / band
+        exit_frac = max(0.0, (band - margin_deg) / band)
+        if worst is None or severity > worst[0]:
+            worst = (severity, exit_frac)
+    if worst is None:
         return None
-    return 100.0 * sum(severities) / len(severities)
+    severity, exit_frac = worst
+    if severity <= exit_frac:
+        return GOOD_END * (severity / exit_frac) if exit_frac > 0 else 0.0
+    if severity <= 1.0:
+        span = 1.0 - exit_frac
+        return GOOD_END + (BAD_START - GOOD_END) * (
+            (severity - exit_frac) / span if span > 0 else 1.0
+        )
+    return BAD_START + (100.0 - BAD_START) * min(severity - 1.0, 1.0)

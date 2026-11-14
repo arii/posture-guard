@@ -122,6 +122,74 @@
   .session-note { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
   #feedback-error { color: var(--bad); font-size: 12.5px; margin-top: 8px; }
   #feedback-error:empty { display: none; }
+
+  /* Fill-on-Hold Button: solid color sweeps across rectangular button like a loading bar until 100% and triggers */
+  .fill-hold-btn {
+    position: relative;
+    overflow: hidden;
+    height: 44px;
+    border-radius: 8px;
+    background: #111419;
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    box-sizing: border-box;
+    margin-top: 12px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .fill-hold-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 0%;
+    background: var(--good);
+    opacity: 0.92;
+    pointer-events: none;
+    transition: width 0.08s linear;
+  }
+  .fill-hold-btn.bad .fill-hold-fill {
+    background: #ff5c5c;
+  }
+  .fill-hold-btn.warn .fill-hold-fill {
+    background: #ffb340;
+  }
+  .fill-hold-btn.good .fill-hold-fill {
+    background: #4cc36a;
+  }
+  .fill-hold-btn.idle .fill-hold-fill {
+    background: #232832;
+  }
+  .fill-hold-inner {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+  }
+  .fill-hold-btn.bad .fill-hold-inner,
+  .fill-hold-btn.warn .fill-hold-inner {
+    color: #ffffff;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+  }
+  .fill-hold-btn.good .fill-hold-inner {
+    color: #0b2412;
+    text-shadow: none;
+  }
+  .fill-hold-btn.triggered {
+    animation: fill-trigger-pop 0.7s ease-out 1;
+  }
+  @keyframes fill-trigger-pop {
+    0% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.95); }
+    50% { transform: scale(1.02); box-shadow: 0 0 0 14px rgba(255, 255, 255, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+  }
 </style>
 </head>
 <body>
@@ -169,6 +237,14 @@
         <text x="16" y="119" font-size="10" fill="#4cc36a">good</text>
         <text x="184" y="119" font-size="10" fill="#ff5c5c" text-anchor="end">over</text>
       </svg>
+      <!-- Fill-on-Hold Button: solid color sweeps across rectangular button like a loading bar until 100% and triggers -->
+      <div id="fill-hold-btn" class="fill-hold-btn idle" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div id="fill-hold-fill" class="fill-hold-fill"></div>
+        <div class="fill-hold-inner">
+          <span id="fill-hold-text">Posture Signal</span>
+          <span id="fill-hold-pct">0%</span>
+        </div>
+      </div>
       <div id="hold-countdown" style="display:none; margin-top:10px">
         <div id="hold-countdown-label" style="font-size:12px; color:var(--muted); margin-bottom:4px">Reminder in --s</div>
         <div style="height:10px; border-radius:5px; background:var(--bg); border:1px solid var(--line); overflow:hidden">
@@ -334,36 +410,54 @@ function drawSkeleton() {
   });
 }
 
-function setSetting(id, value) {
-  // Server-owned values seed the form; a field being edited is never clobbered.
-  const el = document.getElementById(id);
-  if (el && document.activeElement !== el) el.value = value;
-}
+let feedbackInitialized = false;
 
 function applyFeedback(fb) {
   if (!fb) return;
   const modeInput = document.querySelector(
     'input[name="feedback-mode"][value="' + fb.mode + '"]'
   );
-  if (modeInput) modeInput.checked = true;
-  setSetting("set-chime_text", fb.chime_text);
-  setSetting("set-voice_delay_s", fb.voice_delay_s);
-  setSetting("set-voice_repeat_cooldown_s", fb.voice_repeat_cooldown_s);
+  if (modeInput && document.activeElement !== modeInput) modeInput.checked = true;
+  if (!feedbackInitialized) {
+    const textEl = document.getElementById("set-chime_text");
+    const delayEl = document.getElementById("set-voice_delay_s");
+    const repeatEl = document.getElementById("set-voice_repeat_cooldown_s");
+    if (textEl && textEl.value === "") textEl.value = fb.chime_text || "";
+    if (delayEl && delayEl.value === "") delayEl.value = fb.voice_delay_s;
+    if (repeatEl && repeatEl.value === "") repeatEl.value = fb.voice_repeat_cooldown_s;
+    feedbackInitialized = true;
+  }
 }
 
 function applyNudgeEvent(event) {
   if (!event || event.seq === lastNudgeSeq) return;
   lastNudgeSeq = event.seq;
   const muted = event.muted ? " (muted)" : "";
+  const reward = event.kind === "positive_chime";
+  if (reward && window.noteRewardChime) window.noteRewardChime();
   nudgeEventEl.textContent = reminderLabel(event) + muted;
+  // The reward is good news: green banner, never the amber reminder style.
+  nudgeEventEl.style.background = reward ? "#4cc36a" : "";
+  nudgeEventEl.style.color = reward ? "#0b2412" : "";
   nudgeEventEl.classList.add("show");
   badge.classList.remove("pulse");
   void badge.offsetWidth; // restart the animation on repeated nudges
   badge.classList.add("pulse");
   pulseActive = true;
+  if (window.triggerFillFlash) window.triggerFillFlash();
+  const fill = document.getElementById("fill-hold-fill");
+  const textEl = document.getElementById("fill-hold-text");
+  const pctEl = document.getElementById("fill-hold-pct");
+  const btn = document.getElementById("fill-hold-btn");
+  if (btn) btn.className = "fill-hold-btn " + (reward ? "good" : event.kind === "voice" ? "warn" : "bad") + " triggered";
+  if (fill) fill.style.width = "100%";
+  if (textEl) textEl.textContent = (reward ? "" : "⚡ ") + reminderLabel(event) + muted;
+  if (pctEl) pctEl.textContent = "100%";
   clearTimeout(nudgeEventTimer);
   nudgeEventTimer = setTimeout(() => {
     nudgeEventEl.classList.remove("show");
+    nudgeEventEl.style.background = "";
+    nudgeEventEl.style.color = "";
     badge.classList.remove("pulse");
     pulseActive = false;
   }, 2000);
@@ -373,6 +467,7 @@ function reminderLabel(event) {
   // Plain language: every reminder names itself. Voice shows the spoken text.
   if (event.kind === "voice") return "Reminder: " + (event.text || "spoken prompt");
   if (event.kind === "chime") return "Reminder: chime";
+  if (event.kind === "positive_chime") return "Nice posture ✓";
   return "Reminder: " + (event.text || event.kind);
 }
 
@@ -493,8 +588,21 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
     const value = parseFloat(document.getElementById("set-" + key).value);
     if (!Number.isNaN(value)) body[key] = value;
   }
-  try { await post("/feedback/settings", body); }
-  catch (exc) { error.textContent = String(exc.message || exc); }
+  try {
+    const updated = await post("/feedback/settings", body);
+    if (updated) {
+      if (updated.chime_text !== undefined) document.getElementById("set-chime_text").value = updated.chime_text;
+      if (updated.voice_delay_s !== undefined) document.getElementById("set-voice_delay_s").value = updated.voice_delay_s;
+      if (updated.voice_repeat_cooldown_s !== undefined) document.getElementById("set-voice_repeat_cooldown_s").value = updated.voice_repeat_cooldown_s;
+      error.style.color = "#4cc36a";
+      error.textContent = "Settings saved!";
+      setTimeout(() => { if (error.textContent === "Settings saved!") error.textContent = ""; }, 2500);
+    }
+  }
+  catch (exc) {
+    error.style.color = "var(--warn)";
+    error.textContent = String(exc.message || exc);
+  }
 });
 </script>
 <script>
@@ -504,24 +612,48 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
 (function () {
   const BAD_STATES = new Set(["bad_chime", "bad_voice"]);
   const DEFAULT_VOICE_DELAY_S = 10; // feedback.voice_delay_s default (feedback.py)
+  // Gauge thirds, mirroring needle.py: the worst metric's exit fraction maps
+  // to GOOD_END and its enter threshold maps to BAD_START, so green/amber/red
+  // always agrees with the backend good/ok/bad zone.
+  const GOOD_END = 100 / 3, BAD_START = 200 / 3;
   let badStartedAt = null; // ms timestamp when this BAD hold began
   let holdDelayS = null;   // voice delay the bar is currently counting down
+  let smoothScore = null;  // EMA of the needle score (display smoothing only)
+  let currentBand = null;  // good | ok | bad from the smoothed score
+  let lastRewardAt = null; // ms timestamp of the last reward chime event
 
-  function severity(value, threshold) {
-    if (value === null || value === undefined || threshold === null ||
-        threshold === undefined || threshold <= 0) return null;
-    return Math.min(1, Math.abs(value) / threshold);
+  window.noteRewardChime = function () { lastRewardAt = Date.now(); };
+
+  function worstSeverity(metrics, thresholds) {
+    if (!metrics || !thresholds) return null;
+    const margin = Number(thresholds.hysteresis_margin_deg) || 0;
+    const trunkRequired = thresholds.trunk_lean_required !== false;
+    let worst = null;
+    Object.keys(metrics).forEach((key) => {
+      const value = metrics[key];
+      if (value === null || value === undefined) return;
+      if (key === "trunk_lean_deg" && !trunkRequired) return;
+      const threshold = thresholds[key];
+      if (threshold === null || threshold === undefined || threshold <= 0) return;
+      const sev = Math.abs(value) / threshold;
+      const exitFrac = Math.max(0, (threshold - margin) / threshold);
+      if (worst === null || sev > worst.severity) worst = { severity: sev, exitFrac };
+    });
+    return worst;
   }
 
   function compositeScore(metrics, thresholds) {
-    if (!metrics || !thresholds) return null;
-    let sum = 0, count = 0;
-    Object.keys(metrics).forEach((key) => {
-      const sev = severity(metrics[key], thresholds[key]);
-      if (sev === null) return;
-      sum += sev; count += 1;
-    });
-    return count === 0 ? null : (100 * sum) / count;
+    const worst = worstSeverity(metrics, thresholds);
+    if (!worst) return null;
+    if (worst.severity <= worst.exitFrac) {
+      return worst.exitFrac > 0 ? GOOD_END * (worst.severity / worst.exitFrac) : 0;
+    }
+    if (worst.severity <= 1) {
+      const span = 1 - worst.exitFrac;
+      return GOOD_END + (BAD_START - GOOD_END) *
+        (span > 0 ? (worst.severity - worst.exitFrac) / span : 1);
+    }
+    return BAD_START + (100 - BAD_START) * Math.min(worst.severity - 1, 1);
   }
 
   function updateNeedle(payload) {
@@ -533,33 +665,168 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
       // No usable metrics (no person, thresholds not yet received).
       panel.style.opacity = "0.45";
       scoreEl.textContent = "--";
+      smoothScore = null;
+      currentBand = null;
       return;
     }
+    // Light display smoothing so one jittery frame never swings the gauge;
+    // the band still settles exactly on the backend zone.
+    smoothScore = smoothScore === null ? score : 0.65 * smoothScore + 0.35 * score;
+    currentBand = smoothScore < GOOD_END ? "good" : smoothScore < BAD_START ? "ok" : "bad";
     // UNRELIABLE keeps the last-known position but dims the gauge.
     panel.style.opacity = payload.state === "unreliable" ? "0.45" : "1";
-    rotor.setAttribute("transform", "rotate(" + (score * 1.8).toFixed(1) + " 100 100)");
-    scoreEl.textContent = String(Math.round(score));
+    rotor.setAttribute("transform", "rotate(" + (smoothScore * 1.8).toFixed(1) + " 100 100)");
+    scoreEl.textContent = String(Math.round(smoothScore));
   }
 
-  function updateCountdown(payload) {
+  let lastState = null;
+  let stateEnteredAt = Date.now();
+  let slouchEnteredAt = null;
+  let flashTimer = null;
+
+  window.triggerFillFlash = function () {
+    const btn = document.getElementById("fill-hold-btn");
+    if (!btn) return;
+    btn.classList.remove("triggered");
+    void btn.offsetWidth; // restart animation
+    btn.classList.add("triggered");
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => btn.classList.remove("triggered"), 800);
+  };
+
+  function updateFillHold(payload) {
+    const btn = document.getElementById("fill-hold-btn");
+    const fill = document.getElementById("fill-hold-fill");
+    const textEl = document.getElementById("fill-hold-text");
+    const pctEl = document.getElementById("fill-hold-pct");
     const wrap = document.getElementById("hold-countdown");
     const label = document.getElementById("hold-countdown-label");
     const bar = document.getElementById("hold-bar");
+    if (!btn || !fill || !textEl || !pctEl) return;
+
+    const now = Date.now();
+    if (payload.state !== lastState) {
+      lastState = payload.state;
+      stateEnteredAt = now;
+      lastRewardAt = null; // leaving GOOD resets the backend reward timer too
+      if (payload.state === "bad_chime" || payload.state === "bad_voice") {
+        window.triggerFillFlash();
+      }
+    }
+
     const isBad = BAD_STATES.has(payload.state);
     if (!isBad) {
       badStartedAt = null; // GOOD/UNRELIABLE reset the hold
-      wrap.style.display = "none";
+      if (wrap) wrap.style.display = "none";
+    }
+
+    // Hold durations come from the backend config echo, never hardcoded.
+    const timings = payload.timings || {};
+    const badSustainS = Number(timings.bad_sustain_s) || 1.0;
+    const goodConfirmS = Number(timings.good_confirm_s) || 1.5;
+
+    if (payload.state === "no_person") {
+      slouchEnteredAt = null;
+      btn.className = "fill-hold-btn idle";
+      fill.style.width = "0%";
+      textEl.textContent = "Waiting for person — sit in frame";
+      pctEl.textContent = "0%";
       return;
     }
-    const delay = (payload.feedback && payload.feedback.voice_delay_s) || DEFAULT_VOICE_DELAY_S;
-    if (badStartedAt === null || holdDelayS !== delay) {
-      badStartedAt = Date.now();
-      holdDelayS = delay;
+
+    if (payload.state === "unreliable") {
+      slouchEnteredAt = null;
+      btn.className = "fill-hold-btn idle";
+      fill.style.width = "0%";
+      textEl.textContent = "Signal unreadable — check camera";
+      pctEl.textContent = "0%";
+      return;
     }
-    wrap.style.display = "block";
-    const remaining = Math.max(0, holdDelayS - (Date.now() - badStartedAt) / 1000);
-    label.textContent = "Reminder in " + Math.ceil(remaining) + "s";
-    bar.style.width = (100 * Math.max(0, remaining / holdDelayS)).toFixed(1) + "%";
+
+    if (payload.state === "bad_voice") {
+      slouchEnteredAt = null;
+      const cooldown = (payload.feedback && payload.feedback.voice_repeat_cooldown_s) || 5.0;
+      const elapsed = (now - stateEnteredAt) / 1000;
+      const pct = Math.min(100, Math.max(0, (elapsed / cooldown) * 100));
+      const rem = Math.max(0, cooldown - elapsed);
+      btn.className = "fill-hold-btn bad";
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = rem > 0 ? "Bad posture hold — Voice repeats in " + rem.toFixed(1) + "s" : "Triggering voice prompt...";
+      pctEl.textContent = Math.round(pct) + "%";
+      if (wrap && label && bar) {
+        wrap.style.display = "block";
+        label.textContent = "Voice repeats in " + Math.ceil(rem) + "s";
+        bar.style.width = (100 - pct).toFixed(1) + "%";
+      }
+      return;
+    }
+
+    if (payload.state === "bad_chime") {
+      slouchEnteredAt = null;
+      const delay = (payload.feedback && payload.feedback.voice_delay_s) || DEFAULT_VOICE_DELAY_S;
+      const elapsed = (now - stateEnteredAt) / 1000;
+      const pct = Math.min(100, Math.max(0, (elapsed / delay) * 100));
+      const rem = Math.max(0, delay - elapsed);
+      btn.className = "fill-hold-btn warn";
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = rem > 0 ? "Slouch hold — Spoken prompt in " + rem.toFixed(1) + "s" : "Triggering spoken prompt...";
+      pctEl.textContent = Math.round(pct) + "%";
+      if (wrap && label && bar) {
+        wrap.style.display = "block";
+        label.textContent = "Reminder in " + Math.ceil(rem) + "s";
+        bar.style.width = (100 - pct).toFixed(1) + "%";
+      }
+      return;
+    }
+
+    // Good state: the backend streaks drive progress, so the bar hits 100%
+    // exactly when the backend fires - never "triggering" with no sound.
+    if (currentBand === "bad") {
+      const streak = typeof payload.bad_streak_s === "number" ? payload.bad_streak_s : 0;
+      const pct = Math.min(100, Math.max(0, (streak / badSustainS) * 100));
+      const rem = Math.max(0, badSustainS - streak);
+      btn.className = "fill-hold-btn bad";
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = rem > 0 ? "Slouch detected — Chime in " + rem.toFixed(1) + "s" : "Chime triggering...";
+      pctEl.textContent = Math.round(pct) + "%";
+      return;
+    }
+    if (currentBand === "ok") {
+      btn.className = "fill-hold-btn warn";
+      const pct = smoothScore === null ? 0 : Math.min(100, Math.max(0, smoothScore));
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = "Posture OK — hold steady";
+      pctEl.textContent = Math.round(pct) + "%";
+      return;
+    }
+    // Green: confirm-good progress from the backend streak, then the reward
+    // cooldown counts down to the next positive chime.
+    const goodStreak = typeof payload.good_streak_s === "number" ? payload.good_streak_s : 0;
+    if (goodStreak < goodConfirmS) {
+      const pct = Math.min(100, Math.max(0, (goodStreak / goodConfirmS) * 100));
+      btn.className = "fill-hold-btn good";
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = "Good posture hold — Confirming...";
+      pctEl.textContent = Math.round(pct) + "%";
+      return;
+    }
+    const every = Number(timings.positive_every_s) || 0;
+    if (timings.positive_enabled !== false && every > 0) {
+      const sinceReward = lastRewardAt === null
+        ? Math.max(0, goodStreak - goodConfirmS)
+        : Math.max(0, (now - lastRewardAt) / 1000);
+      const pct = Math.min(100, Math.max(0, (sinceReward / every) * 100));
+      const rem = Math.max(0, every - sinceReward);
+      btn.className = "fill-hold-btn good";
+      fill.style.width = pct.toFixed(1) + "%";
+      textEl.textContent = rem > 0 ? "Good — reward chime in " + Math.ceil(rem) + "s" : "Playing reward chime...";
+      pctEl.textContent = Math.round(pct) + "%";
+      return;
+    }
+    btn.className = "fill-hold-btn good";
+    fill.style.width = "100%";
+    textEl.textContent = "✓ Good Posture Held";
+    pctEl.textContent = "100%";
   }
 
   const previousApply = window.apply;
@@ -567,7 +834,7 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
     window.apply = function (payload) {
       previousApply(payload);
       updateNeedle(payload);
-      updateCountdown(payload);
+      updateFillHold(payload);
     };
   }
 })();
