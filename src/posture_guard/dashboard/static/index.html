@@ -61,10 +61,26 @@
   @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
   .video-wrap {
     position: relative; background: #000; border-radius: 8px;
-    overflow: hidden; border: 1px solid var(--line);
+    overflow: hidden; border: 2px solid var(--line);
+    transition: border-color 0.2s linear;
   }
   .video-wrap img, .video-wrap canvas { display: block; width: 100%; height: auto; }
   .video-wrap canvas { position: absolute; inset: 0; }
+  /* Mini-HUD (PiP): the feed collapses into a 120x120 corner widget — status
+     ring (the border, recolored to the wireframe state) plus a 2-axis
+     inclinometer dot. Click it or the header HUD button to toggle. */
+  .video-wrap.pip {
+    position: fixed; right: 16px; bottom: 16px; width: 120px; height: 120px;
+    z-index: 20; cursor: pointer; border-width: 3px;
+  }
+  .video-wrap.pip img, .video-wrap.pip canvas { height: 100%; object-fit: cover; }
+  #hud-dot {
+    display: none; position: absolute; width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; border: 1.5px solid #0b0e13;
+    transform: translate(-50%, -50%); box-shadow: 0 0 6px rgba(0,0,0,.8);
+    pointer-events: none;
+  }
+  .video-wrap.pip #hud-dot { display: block; }
   .panel {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 8px; padding: 14px 16px;
@@ -74,6 +90,11 @@
     color: var(--muted); margin: 0 0 10px;
   }
   .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* Layout consolidation: when tracking is unreliable the cards dim and the
+     reason renders beneath them, so stale numbers never read as live truth. */
+  .tiles.dimmed { opacity: 0.45; filter: saturate(0.6); transition: opacity 0.2s linear; }
+  #metrics-note { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 14px; }
+  #metrics-note.unreliable { color: var(--warn); }
   .tile { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
   .tile .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   .tile .value { font-size: 26px; font-weight: 600; }
@@ -124,6 +145,13 @@
     cursor: pointer; width: 100%;
   }
   button:disabled { opacity: 0.5; cursor: default; }
+  /* Header toggle sits in the flex header, so it opts out of the full-width
+     button style above. */
+  #pip-toggle {
+    width: auto; flex: none; margin: 0; padding: 8px 14px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line);
+  }
   .btn-row { display: flex; gap: 8px; margin-top: 12px; }
   .btn-row button { margin-top: 0; }
   .btn-row button.secondary {
@@ -159,11 +187,13 @@
   <span id="nudge-event">nudge</span>
   <span class="stat"><b id="fps">-</b> fps</span>
   <span class="stat">depth <b id="depth">-</b></span>
+  <button id="pip-toggle" class="secondary" title="Collapse the video into a 120x120 corner HUD (status ring + inclinometer dot)" style="margin-left:auto">&#9788; Mini HUD</button>
 </header>
 <main>
   <div class="video-wrap">
     <img id="video" src="/video.mjpg" alt="Live camera view with posture overlay">
     <canvas id="overlay"></canvas>
+    <div id="hud-dot" title="Inclinometer: horizontal = trunk lean, vertical = head forward"></div>
   </div>
   <div>
     <div id="warnings"></div>
@@ -175,6 +205,7 @@
         <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div><div class="bullet" id="bar-head_tilt_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-head_tilt_deg"></div></div>
         <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div><div class="bullet" id="bar-shoulder_level_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-shoulder_level_deg"></div></div>
       </div>
+      <div id="metrics-note"></div>
       <div class="status-row">
         <span class="stat">camera <b id="camera">-</b><span id="camera-detail" class="stat"></span></span>
         <span class="stat">audio <b id="audio">-</b><span id="audio-detail" class="stat"></span><span id="audio-error" class="stat"></span></span>
@@ -222,14 +253,17 @@
     </div>
     <div class="panel" style="margin-top: 16px">
       <h2>Camera placement</h2>
-      <ul class="guide">
-        <li>Person fully in frame, facing the camera</li>
-        <li>Mount the camera HIGH — on a shelf or wall mount roughly 0.4&ndash;0.5&nbsp;m above head height — and tilt it down about 45&deg; at your mid-torso. At the normal ~0.6&ndash;0.8&nbsp;m working distance this fits head and hips in frame</li>
-        <li>Alternative for deep desks: sit 1.0&ndash;1.5&nbsp;m away with the camera at chest/neck height aimed at mid-torso</li>
-        <li>USB 3 port for stable depth</li>
-      </ul>
+      <!-- Collapsed by default to keep the first screen about posture, not
+           setup; the JS auto-expands on first launch until tracking is
+           confirmed, and again whenever tracking stays UNRELIABLE > 5s. -->
       <details class="guide-details" id="placement-guide">
-        <summary>Placement diagrams (top view and side view)</summary>
+        <summary>Placement guide &amp; diagrams (top view and side view)</summary>
+        <ul class="guide">
+          <li>Person fully in frame, facing the camera</li>
+          <li>Mount the camera HIGH — on a shelf or wall mount roughly 0.4&ndash;0.5&nbsp;m above head height — and tilt it down about 45&deg; at your mid-torso. At the normal ~0.6&ndash;0.8&nbsp;m working distance this fits head and hips in frame</li>
+          <li>Alternative for deep desks: sit 1.0&ndash;1.5&nbsp;m away with the camera at chest/neck height aimed at mid-torso</li>
+          <li>USB 3 port for stable depth</li>
+        </ul>
         <svg class="scene" id="placement-guide-top" viewBox="0 0 880 300" role="img" aria-label="Top view: camera positions by angle from the user's facing direction">
           <!-- desk edge -->
           <rect x="180" y="24" width="520" height="14" rx="3" fill="#232a34"/>
@@ -303,8 +337,9 @@
           <text x="470" y="240" class="lbl-sm">head &#10003; shoulders &#10003; hips &#10003;</text>
         </svg>
       </details>
-      <button id="test-nudge">&#9654; Test reminder</button>
-      <a href="/docs" class="stat" style="margin-left: 12px">How it works &rarr;</a>
+      <!-- One test control for the current mode: chime_and_voice plays both,
+           chime_only the chime, silent nothing (the tooltip explains). -->
+      <a href="/docs" class="stat">How it works &rarr;</a>
     </div>
     <div class="panel" style="margin-top: 16px">
       <h2>Feedback</h2>
@@ -313,10 +348,6 @@
         <label><input type="radio" name="feedback-mode" value="chime_only"> Chime only</label>
         <label><input type="radio" name="feedback-mode" value="silent"> Silent</label>
       </div>
-      <div class="btn-row">
-        <button id="play-chime" class="secondary">&#9835; Play chime</button>
-        <button id="play-voice" class="secondary">&#128483; Speak prompt</button>
-      </div>
       <div class="feedback-form">
         <label for="set-chime_text">Spoken prompt text</label>
         <input type="text" id="set-chime_text" maxlength="120">
@@ -324,7 +355,10 @@
         <input type="number" id="set-voice_delay_s" min="1" step="0.5">
         <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
         <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
-        <div class="btn-row"><button id="apply-settings">Apply settings</button></div>
+        <div class="btn-row">
+        <button id="apply-settings">Apply settings</button>
+        <button id="test-alert" class="secondary" title="Plays what the current mode would play: chime_and_voice plays both, chime_only the chime, silent nothing">&#9654; Test alert</button>
+      </div>
         <div id="feedback-error"></div>
         <div class="session-note">Settings apply immediately but are session-only &mdash; they reset on restart (config.yaml keeps its defaults).</div>
       </div>
@@ -567,24 +601,14 @@ async function post(url, body) {
   return response.json();
 }
 
-document.getElementById("test-nudge").addEventListener("click", async (event) => {
+// One test control plays whatever the current mode would play (/nudge/test
+// routes through the same gating as real reminders: chime_and_voice plays
+// both, chime_only the chime, silent nothing).
+const testAlertButton = document.getElementById("test-alert");
+testAlertButton.addEventListener("click", async (event) => {
   const button = event.target;
   button.disabled = true;
   try { await post("/nudge/test"); }
-  finally { button.disabled = false; }
-});
-
-document.getElementById("play-chime").addEventListener("click", async (event) => {
-  const button = event.target;
-  button.disabled = true;
-  try { await post("/nudge/chime"); }
-  finally { button.disabled = false; }
-});
-
-document.getElementById("play-voice").addEventListener("click", async (event) => {
-  const button = event.target;
-  button.disabled = true;
-  try { await post("/nudge/voice"); }
   finally { button.disabled = false; }
 });
 
@@ -726,6 +750,96 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
       updateNeedle(payload);
       updateCountdown(payload);
       updateGraceRing(payload);
+    };
+  }
+})();
+</script>
+<script>
+// Group 3: mini-HUD/PiP toggle and layout consolidation. Wraps apply() like
+// the needle block; all state (last, thresholds, wireStyle) is global.
+(function () {
+  const videoWrap = document.querySelector(".video-wrap");
+  const hudDot = document.getElementById("hud-dot");
+  const pipToggle = document.getElementById("pip-toggle");
+  const guide = document.getElementById("placement-guide");
+  const tiles = document.querySelector(".tiles");
+  const metricsNote = document.getElementById("metrics-note");
+
+  // Mini HUD: the border is the status ring (recolored to the wireframe state
+  // every frame); the dot is a 2-axis inclinometer — x: trunk lean, y: head
+  // forward, scaled by 1.5x each threshold like the bullet bars. No dot when
+  // a value is missing (trunk lean optional) or tracking is down.
+  function updateHud() {
+    const wire = window.wireStyle && window.wireStyle();
+    if (wire) videoWrap.style.borderColor = wire.color;
+    const pip = videoWrap.classList.contains("pip");
+    if (pip && last && last.metrics && thresholds) { // top-level const/let are in the global lexical scope
+      const trunk = last.metrics.trunk_lean_deg;
+      const head = last.metrics.head_forward_deg;
+      // (last/thresholds are the main script's globals, not window props.)
+      if (trunk !== null && head !== null) {
+        const clamp = (v) => Math.max(-1, Math.min(1, v));
+        const nx = clamp(trunk / ((thresholds.trunk_lean_deg || 7) * 1.5)) * 0.4;
+        const ny = clamp(head / ((thresholds.head_forward_deg || 8) * 1.5)) * 0.4;
+        hudDot.style.left = (50 + nx * 100) + "%";
+        hudDot.style.top = (50 + ny * 100) + "%";
+        hudDot.style.display = "block";
+        return;
+      }
+    }
+    hudDot.style.display = pip ? "none" : ""; // no dot without both values
+  }
+
+  function setPip(on) {
+    videoWrap.classList.toggle("pip", on);
+    pipToggle.textContent = on ? "\u25A4 Full view" : "\u263C Mini HUD";
+    updateHud();
+  }
+  pipToggle.addEventListener("click", () =>
+    setPip(!videoWrap.classList.contains("pip"))
+  );
+  videoWrap.addEventListener("click", () => {
+    if (videoWrap.classList.contains("pip")) setPip(false);
+  });
+
+  // Placement guide: open on first launch (kept open until tracking is
+  // confirmed, so a first-run user reads it), auto-closed by the first
+  // reliable snapshot — but a manual toggle always wins over the automation.
+  guide.open = true;
+  let userTouchedGuide = false;
+  guide.querySelector("summary").addEventListener("click", () => {
+    userTouchedGuide = true;
+  });
+  let unreliableSince = null;
+  let trackingConfirmed = false;
+
+  const previousApply = window.apply;
+  if (previousApply) {
+    window.apply = function (payload) {
+      previousApply(payload);
+      // Dim the cards and name the reason when tracking is unreliable: stale
+      // numbers must never read as live truth.
+      const unreliable = payload.state === "unreliable";
+      tiles.classList.toggle("dimmed", unreliable);
+      metricsNote.classList.toggle("unreliable", unreliable);
+      metricsNote.textContent = unreliable
+        ? "Tracking unreliable \u2014 values may be stale" +
+          (payload.unreliable_detail ? " \u00B7 " + payload.unreliable_detail : "")
+        : "";
+      // UNRELIABLE sustained > 5s re-opens the placement guide; the first
+      // reliable snapshot closes the first-launch expansion.
+      if (unreliable) {
+        if (unreliableSince === null) unreliableSince = Date.now();
+        else if (Date.now() - unreliableSince > 5000 && !guide.open) guide.open = true;
+      } else {
+        unreliableSince = null;
+        if (!trackingConfirmed && !userTouchedGuide && guide.open &&
+            (payload.state === "good" || payload.state.startsWith("bad_"))) {
+          trackingConfirmed = true;
+          guide.open = false;
+        }
+      }
+      updateHud();
     };
   }
 })();
