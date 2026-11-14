@@ -364,6 +364,8 @@ def test_index_has_mini_hud_and_consolidated_layout_targets() -> None:
     for element_id in ("pip-toggle", "hud-dot", "metrics-note", "placement-guide"):
         assert f'id="{element_id}"' in page
     assert "Mini HUD" in page
+    # Target-vector arrows render at breaching vertices (item 8).
+    assert "drawTargetVectors" in page
     # The placement list lives inside the collapsible guide (item 7).
     assert "Placement guide" in page
 
