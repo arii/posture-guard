@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Posture Guard — Linux desktop posture correction with RealSense</title>
+<meta name="description" content="Posture Guard watches your posture through an Intel RealSense depth camera, scores head/shoulder geometry, and nudges you with a chime, then a voice prompt — all processed locally on your Linux desktop.">
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1d222a;
+    --panel-2: #232935;
+    --line: #2c333e;
+    --text: #e8ebf0;
+    --muted: #8b95a3;
+    --good: #4cc36a;
+    --warn: #ffb340;
+    --accent: #57d97a;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); }
+  code {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.9em;
+  }
+  main { max-width: 1060px; margin: 0 auto; padding: 0 20px 72px; }
+
+  /* Hero */
+  header.hero {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 72px 20px 40px;
+  }
+  .kicker {
+    color: var(--good);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 56px);
+    line-height: 1.1;
+    margin: 0 0 16px;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: clamp(17px, 2.4vw, 20px);
+    color: var(--muted);
+    max-width: 46em;
+    margin: 0 0 28px;
+  }
+  .lede b { color: var(--text); font-weight: 600; }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-block;
+    padding: 11px 20px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 15px;
+    border: 1px solid var(--line);
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); border-color: var(--muted); }
+  .btn.primary { background: var(--good); border-color: var(--good); color: #10241a; }
+  .btn.primary:hover { background: var(--accent); border-color: var(--accent); }
+
+  /* Section headings */
+  section { margin-top: 56px; }
+  h2 {
+    font-size: 22px;
+    margin: 0 0 6px;
+    letter-spacing: 0.01em;
+  }
+  .section-sub { color: var(--muted); margin: 0 0 22px; max-width: 50em; }
+
+  /* Feature grid */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+    color: var(--accent);
+  }
+  .card p { margin: 0; font-size: 14.5px; color: var(--muted); }
+  .card p b { color: var(--text); font-weight: 600; }
+  .pr-tag {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 99px;
+    padding: 1px 9px;
+  }
+
+  /* Screenshots */
+  .shots {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
+  }
+  figure { margin: 0; }
+  .shot {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px;
+  }
+  .shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+  }
+  figcaption {
+    font-size: 13.5px;
+    color: var(--muted);
+    padding: 10px 6px 4px;
+  }
+
+  /* Pipeline */
+  .pipeline {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .pipeline li {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--good);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+  .pipeline b { display: block; margin-bottom: 2px; }
+  .pipeline .muted { font-size: 13.5px; }
+
+  /* Quickstart */
+  .quickstart {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .quickstart ol { margin: 0 0 16px; padding-left: 22px; }
+  .quickstart li { margin: 10px 0; }
+  pre {
+    background: #10141a;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 14px;
+    line-height: 1.55;
+    margin: 8px 0;
+  }
+  pre code { background: none; border: none; padding: 0; }
+
+  /* Privacy band */
+  .privacy {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 22px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .privacy .dot {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--good);
+    margin-top: 6px;
+    box-shadow: 0 0 10px rgba(76, 195, 106, 0.7);
+  }
+  .privacy p { margin: 0; }
+  .privacy .muted { font-size: 14px; }
+
+  footer {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 0 20px 48px;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+
+  @media (max-width: 560px) {
+    header.hero { padding-top: 48px; }
+    .btn { width: 100%; text-align: center; }
+    .card, .quickstart { padding: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <p class="kicker">Intel RealSense · Linux desktop · runs fully local</p>
+  <h1>Posture Guard</h1>
+  <p class="lede">
+    A Linux desktop posture-correction app for Intel RealSense cameras
+    (D415&nbsp;/&nbsp;D435&nbsp;/&nbsp;D435i): live <b>depth+RGB pose scoring</b> with synchronized
+    <b>chime-then-voice reminders</b> and a <b>local verification dashboard</b>.
+  </p>
+  <div class="cta-row">
+    <a class="btn primary" href="https://github.com/arii/posture-guard">GitHub repo</a>
+    <a class="btn" href="https://github.com/arii/posture-guard/blob/main/src/posture_guard/dashboard/static/docs.html">How it works</a>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>What it does</h2>
+    <p class="section-sub">
+      Sit at your desk; the camera watches, scores four head/shoulder angles, and only
+      nudges you when bad posture <em>sustains</em> — chime first, spoken prompt after,
+      silence the moment you sit up. Every feature below is merged code, not a mockup.
+    </p>
+    <div class="features">
+      <div class="card">
+        <h3>State-colored wireframe + root-cause pills</h3>
+        <p>The tracking skeleton changes color with posture state, and a diagnostic pill
+           names the cause — e.g. <b>“TOP EDGE CLIPPED — TILT CAMERA UP”</b> — instead of a vague failure.</p>
+        <span class="pr-tag">PR #15</span>
+      </div>
+      <div class="card">
+        <h3>Unified 0–100 posture needle</h3>
+        <p>A single always-on needle summarizes all metrics at a glance, with a
+           <b>“Reminder in Ns” countdown bar</b> so a nudge never surprises you.</p>
+        <span class="pr-tag">PR #13</span>
+      </div>
+      <div class="card">
+        <h3>Threshold bars + grace-period ring</h3>
+        <p>Each metric card shows its own target band as a bullet bar, and a grace ring
+           counts down the sustain window before a reminder fires.</p>
+        <span class="pr-tag">PR #16</span>
+      </div>
+      <div class="card">
+        <h3>Chime + spoken prompt, configurable modes</h3>
+        <p>Synchronized reminders: chime once when bad posture holds, then a pico2wave
+           voice prompt — with <b>chime+voice / chime-only / silent</b> modes and on-demand test buttons.</p>
+        <span class="pr-tag">PRs #9, #10</span>
+      </div>
+      <div class="card">
+        <h3>Positive reinforcement chime</h3>
+        <p>Sustained good posture earns its own gentle chime on an interval you choose —
+           feedback for sitting well, not just for slouching.</p>
+        <span class="pr-tag">PR #11</span>
+      </div>
+      <div class="card">
+        <h3>Partial-tracking resilience</h3>
+        <p>Hips out of frame? Scoring keeps working from head and shoulders. Only losing
+           the ears + shoulders gates scoring — the dashboard then says so honestly.</p>
+        <span class="pr-tag">PR #7</span>
+      </div>
+      <div class="card">
+        <h3>Personal baseline that catches whole-torso slouch</h3>
+        <p>A slowly adapting EMA baseline per metric catches the <b>whole-torso recline</b>
+           that fixed angle thresholds miss, alongside tighter thresholds and sustain hysteresis.</p>
+        <span class="pr-tag">PR #14</span>
+      </div>
+      <div class="card">
+        <h3>Mini-HUD picture-in-picture</h3>
+        <p>Collapse the video into a <b>120&nbsp;px mini-HUD</b> with a status ring and
+           inclinometer — the dashboard consolidates to what matters while you work.</p>
+        <span class="pr-tag">PR #17</span>
+      </div>
+      <div class="card">
+        <h3>How-it-works page, privacy code-verified</h3>
+        <p>A built-in docs page walks the full pipeline, the pose model, and a privacy section
+           verified against the code: <b>all processing stays local</b>.</p>
+        <span class="pr-tag">PR #12</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <p class="section-sub">One pipeline, end to end, on your own machine:</p>
+    <ol class="pipeline">
+      <li><b>RealSense capture</b>
+        <span class="muted">Depth + RGB from a D400-series camera; depth doubles as a distance gate — you are only scored inside 0.6–2.5&nbsp;m.</span></li>
+      <li><b>MediaPipe Pose</b>
+        <span class="muted">33 2D landmarks with per-landmark visibility, running fully on CPU, in-process.</span></li>
+      <li><b>Scoring</b>
+        <span class="muted">Four angles (head forward, trunk lean, head tilt, shoulder level) against thresholds, with hysteresis, sustain windows, and a personal EMA baseline.</span></li>
+      <li><b>State machine</b>
+        <span class="muted">Bad posture must hold ~2&nbsp;s before a chime; a spoken prompt follows ~10&nbsp;s later and repeats at most every 30&nbsp;s while you stay slouched.</span></li>
+      <li><b>PulseAudio chime + pico2wave TTS</b>
+        <span class="muted">A serialized playback queue renders each prompt on the fly (espeak-ng as fallback) on your chosen audio sink.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>The dashboard</h2>
+    <p class="section-sub">Real screenshots from the live app — wireframe overlay, per-metric target bands, placement guidance, and feedback controls.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="assets/dashboard-shot-1.png" alt="Posture Guard dashboard: live camera view with a green tracking wireframe over a seated person, posture metric tiles with target bands, camera placement checklist, and feedback controls" loading="lazy">
+        <figcaption>The verification dashboard: tracking wireframe on the live video, four metric tiles with their target bands, the camera-placement checklist, and one-tap test reminder.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="assets/dashboard-shot-2.png" alt="Posture Guard dashboard with the person leaning: the wireframe tilts with the torso and the shoulder-level metric is lit amber outside its target band" loading="lazy">
+        <figcaption>The same dashboard mid-lean: the wireframe tilts with the torso and the shoulder-level reading (9°, outside its ±6° band) lights amber.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quickstart</h2>
+    <p class="section-sub">Linux, Python 3.10+, and (optionally, to start) a RealSense — without a camera the pipeline falls back to a synthetic frame source so the dashboard is fully verifiable first.</p>
+    <div class="quickstart">
+      <ol>
+        <li>Clone and set up (system packages + venv + hardware preflight report):
+<pre><code>git clone https://github.com/arii/posture-guard.git
+cd posture-guard
+./setup.sh</code></pre></li>
+        <li>Run the app — it serves the dashboard at <code>http://127.0.0.1:8000</code>:
+<pre><code>make run</code></pre>
+          <p style="margin:6px 0 0">(equivalently: <code>python -m posture_guard.dashboard.serve</code>)</p></li>
+        <li>Tune everything from <code>config.yaml</code> — thresholds
+            (<code>scoring.*_deg</code>), sustain windows (<code>state.*_s</code>),
+            the positive chime (<code>feedback.positive_chime.*</code>), the depth band
+            (<code>scoring.depth_min_m</code> / <code>scoring.depth_max_m</code>), and your
+            audio sink (<code>audio.sink</code>).</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <div class="privacy">
+      <span class="dot" aria-hidden="true"></span>
+      <p>
+        <b>Nothing is recorded, nothing leaves the machine.</b>
+        <span class="muted">Frames are analyzed in memory and dropped — no video, landmarks, or metrics are ever written to disk. The pose model and speech render locally on CPU; the dashboard binds to 127.0.0.1. No cloud, no third-party services — unplug the network and everything keeps working. Verified in the code before it was written on the How-it-works page.</span>
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Posture Guard — built end to end at the Obvious hackathon, San Francisco, November 13, 2026.
+  <a href="https://github.com/arii/posture-guard">arii/posture-guard</a>
+</footer>
+
+</body>
+</html>
