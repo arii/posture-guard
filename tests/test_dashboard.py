@@ -308,17 +308,21 @@ def test_index_page_is_served() -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     # The page is plain DOM driven by the WS payload: overlay canvas, metric
-    # tiles, state badge, the test-nudge button and the feedback controls.
+    # tiles, state badge, the consolidated test-alert button and the feedback
+    # controls. The /nudge/chime and /nudge/voice routes remain server-side
+    # (exercised directly by their own tests); the page no longer references
+    # them after the UX-pass consolidation into one Test alert control.
     for fragment in (
         "<canvas", "/ws", "/video.mjpg", "/nudge/test", "badge",
-        "/nudge/chime", "/nudge/voice", "/feedback/settings",
+        "/feedback/settings",
     ):
         assert fragment in response.text
 
 
 def test_index_has_feedback_controls_and_visual_event_targets() -> None:
-    """Mode selector, per-channel buttons, settings form with the session-only
-    marker, and the synchronized nudge-event banner targets (spec §UI)."""
+    """Mode selector, the consolidated test-alert control, settings form with
+    the session-only marker, and the synchronized nudge-event banner targets
+    (spec §UI; UX pass item 7 merges the per-channel buttons into one)."""
     client = TestClient(create_app(DashboardHub(), RecordingAudio()))
 
     response = client.get("/")
@@ -328,13 +332,16 @@ def test_index_has_feedback_controls_and_visual_event_targets() -> None:
     assert 'name="feedback-mode"' in page
     for mode in ("chime_and_voice", "chime_only", "silent"):
         assert f'value="{mode}"' in page
-    for element_id in ("play-chime", "play-voice", "apply-settings", "set-chime_text",
+    for element_id in ("test-alert", "apply-settings", "set-chime_text",
                        "set-voice_delay_s", "set-voice_repeat_cooldown_s",
                        "nudge-event", "feedback-error"):
         assert f'id="{element_id}"' in page
+    # The per-channel play buttons are gone, merged into the single control.
+    for merged_id in ("play-chime", "play-voice", "test-nudge"):
+        assert f'id="{merged_id}"' not in page
     assert "session-only" in page  # UI states when a setting is not persisted
     # Plain language: 'reminder' everywhere, never 'nudge' (task scope 2).
-    assert "Test reminder" in page
+    assert "Test alert" in page
     assert "Test nudge" not in page
     assert "Reminder: " in page
     # Audio line carries the full status: ready/TTS/sink plus an error target.
@@ -343,6 +350,22 @@ def test_index_has_feedback_controls_and_visual_event_targets() -> None:
     assert "tts_backend" in page
     # Trunk-lean-optional note target on the trunk tile band.
     assert "trunk_note" in page
+
+
+def test_index_has_mini_hud_and_consolidated_layout_targets() -> None:
+    """UX pass items 6+7: the 120x120 mini-HUD toggle and inclinometer dot,
+    the dimmed-tile reason note, and the placement guide as an accordion."""
+    client = TestClient(create_app(DashboardHub(), RecordingAudio()))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    for element_id in ("pip-toggle", "hud-dot", "metrics-note", "placement-guide"):
+        assert f'id="{element_id}"' in page
+    assert "Mini HUD" in page
+    # The placement list lives inside the collapsible guide (item 7).
+    assert "Placement guide" in page
 
 
 def test_index_has_band_labels_and_unreliable_detail_targets() -> None:
