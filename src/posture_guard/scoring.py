@@ -51,6 +51,19 @@ class UnreliableReason(Enum):
     DEPTH_OUT_OF_BAND = "depth_out_of_band"
 
 
+# Top-of-frame margin (fraction of frame height) for the boundary check: an
+# ear inside this band means the head is being cropped by the top edge —
+# the high-mount framing failure whose fix is tilting the camera up.
+HEAD_CLIP_MARGIN = 0.10
+
+
+def head_clipped_top(landmarks: Sequence[Landmark]) -> bool:
+    """True when an ear sits inside the top frame margin. Hips near the bottom
+    edge are normal in the high-mount framing and never clip-flagged; the ears
+    are the head signal the boundary check exists for."""
+    return any(landmarks[i].y < HEAD_CLIP_MARGIN for i in (LEFT_EAR, RIGHT_EAR))
+
+
 # Tracked landmark groups for human-readable reliability detail: name and the
 # (left, right) landmark pair.
 _TRACKED_GROUPS: tuple[tuple[str, tuple[int, int]], ...] = (

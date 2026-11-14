@@ -33,6 +33,12 @@
     background: var(--warn); color: #3a2503; font-size: 11px;
     padding: 2px 10px; text-transform: none; letter-spacing: 0.03em;
   }
+  /* Root-cause pill: the exact failure with its action, crimson for
+     action-needed (extends the demoted tracking pill, never the old banner). */
+  .badge.cause {
+    background: var(--bad); color: #2b0707; font-size: 11px;
+    padding: 2px 10px; letter-spacing: 0.04em;
+  }
   .badge.no_person  { background: #3a4250; color: var(--text); }
   /* Synchronized nudge event: the badge flashes once in the channel's color. */
   @keyframes nudge-pulse {
@@ -303,7 +309,7 @@ const badge = document.getElementById("state-badge");
 const nudgeEventEl = document.getElementById("nudge-event");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
-const last = { landmarks: null };
+const last = { landmarks: null, state: null, metrics: null, cause: null };
 let thresholds = null; // scoring thresholds from the server, never hardcoded
 let lastNudgeSeq = 0;  // sequence-numbered nudge events re-trigger the banner
 let nudgeEventTimer = null;
@@ -322,6 +328,39 @@ function metric(id, value) {
     limit === undefined ? "" : "good within \u00B1" + limit + "\u00B0";
 }
 
+// One reliability signal, one color: the wireframe stroke matches the header
+// pill. Slate = do not trust, crimson = confirmed breach, amber = drifting
+// past a threshold before the state machine confirms it, emerald = good.
+// Colors mirror pipeline.wire_color_for (pipeline.py) so the MJPEG skeleton
+// and the canvas skeleton never contradict.
+function wireStyle() {
+  if (last.state === "unreliable") return { color: "#8b95a3", dash: [9, 6] };
+  if (last.state === "bad_chime" || last.state === "bad_voice")
+    return { color: "#ef4444", dash: null };
+  if (thresholds && last.metrics) {
+    const drifting = Object.entries(last.metrics).some(([key, value]) =>
+      value !== null && thresholds[key] !== undefined &&
+      Math.abs(value) >= thresholds[key]
+    );
+    if (drifting) return { color: "#f59e0b", dash: null };
+  }
+  if (last.state === "good") return { color: "#10b981", dash: null };
+  return { color: "#8b95a3", dash: null }; // no_person: nothing draws anyway
+}
+
+function drawEdgeVignette(w, h) {
+  // Red glow along the border that clips a keypoint (top edge check from the
+  // server's boundary check — the high-mount framing failure).
+  if (!last.cause || last.cause.edge !== "top") return;
+  const ctx = overlay.getContext("2d");
+  const depth = h * 0.14;
+  const glow = ctx.createLinearGradient(0, 0, 0, depth);
+  glow.addColorStop(0, "rgba(239, 68, 68, 0.85)");
+  glow.addColorStop(1, "rgba(239, 68, 68, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, depth);
+}
+
 function drawSkeleton() {
   const w = video.clientWidth, h = video.clientHeight;
   overlay.width = w; overlay.height = h;
@@ -330,14 +369,19 @@ function drawSkeleton() {
   if (!last.landmarks) return;
   const pts = {};
   last.landmarks.forEach(([x, y], i) => { pts[NAMES[i]] = [x * w, y * h]; });
-  ctx.strokeStyle = "#4cc36a"; ctx.lineWidth = 3;
+  const wire = wireStyle();
+  ctx.strokeStyle = wire.color;
+  ctx.lineWidth = 3;
+  if (wire.dash) ctx.setLineDash(wire.dash);
   SKELETON.forEach(([a, b]) => {
     ctx.beginPath(); ctx.moveTo(...pts[a]); ctx.lineTo(...pts[b]); ctx.stroke();
   });
-  ctx.fillStyle = "#4cc36a";
+  ctx.setLineDash([]);
+  ctx.fillStyle = wire.color;
   Object.values(pts).forEach(([x, y]) => {
     ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
   });
+  drawEdgeVignette(w, h);
 }
 
 function setSetting(id, value) {
@@ -385,10 +429,23 @@ function reminderLabel(event) {
 function apply(payload) {
   // Demoted: unreliable tracking reads as a small amber "tracking partial"
   // pill instead of a big red state badge; the missing-landmark reason stays
-  // in the reliability line below the metrics.
-  badge.textContent =
-    payload.state === "unreliable" ? "tracking partial" : payload.state.replace(/_/g, " ");
-  badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
+  // in the reliability line below the metrics. When the server names a single
+  // actionable root cause, the badge carries THAT — failure with its fix —
+  // and the state word moves to the tooltip.
+  const cause = payload.root_cause;
+  if (cause && cause.title) {
+    badge.textContent = cause.title.toUpperCase() + " \u2014 " + cause.action.toUpperCase();
+    badge.title = "state: " + payload.state;
+    badge.className = "badge cause" + (pulseActive ? " pulse" : "");
+  } else {
+    badge.title = "";
+    badge.textContent =
+      payload.state === "unreliable" ? "tracking partial" : payload.state.replace(/_/g, " ");
+    badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
+  }
+  last.state = payload.state;
+  last.metrics = payload.metrics;
+  last.cause = cause || null;
   document.getElementById("fps").textContent = payload.fps;
   document.getElementById("depth").textContent =
     payload.depth_m === null ? "-" : payload.depth_m.toFixed(1) + " m";
