@@ -10,7 +10,6 @@ injectable: detector, renderer, audio sink and hub are constructor parameters.
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -35,11 +34,10 @@ from posture_guard.scoring import (
     ScoringResult,
     Unreliable,
     UnreliableReason,
+    head_clipped_top,
     score_pose,
 )
 from posture_guard.state import Nudge, PostureState, PostureStateMachine, Transition
-
-logger = logging.getLogger(__name__)
 
 
 class NudgeSink(Protocol):
@@ -63,13 +61,72 @@ def default_frame_renderer(
     state_text: str,
     depth_text: str,
     reason_text: str = "",
+    *,
+    wire_color: str = "",
 ) -> bytes:
     """Skeleton overlay + banner + JPEG encode; OpenCV imported lazily."""
     from posture_guard.dashboard.annotate import draw_overlay, encode_jpeg
 
     return encode_jpeg(
-        draw_overlay(color, landmarks, state_text, depth_text, reason_text)
+        draw_overlay(color, landmarks, state_text, depth_text, reason_text, wire_color)
     )
+
+
+# Wireframe stroke colors, shared with the client canvas (index.html): the
+# skeleton never contradicts the header — one reliability signal, one color.
+_WIRE_GOOD = "#10b981"   # emerald: tracked and good
+_WIRE_DRIFT = "#f59e0b"  # amber: drifting past a threshold, not yet confirmed
+_WIRE_BAD = "#ef4444"    # crimson: sustained breach
+_WIRE_UNRELIABLE = "#8b95a3"  # slate: do not trust this frame
+
+
+def wire_color_for(state: str, result: ScoringResult, cfg: ScoringConfig) -> str:
+    """Wireframe stroke color bound to reliability BEFORE angle thresholds:
+    slate when the frame is untrustworthy, crimson only for a confirmed breach,
+    amber for pre-sustain drift, emerald for good."""
+    if state == "unreliable":
+        return _WIRE_UNRELIABLE
+    if state in ("bad_chime", "bad_voice"):
+        return _WIRE_BAD
+    angles = result if isinstance(result, ScoredPosture) else None
+    if angles is not None and any(
+        abs(value) > threshold
+        for value, threshold in (
+            (angles.head_forward_deg, cfg.head_forward_deg),
+            (angles.head_tilt_deg, cfg.head_tilt_deg),
+            (angles.shoulder_level_deg, cfg.shoulder_level_deg),
+        )
+    ):
+        return _WIRE_DRIFT
+    if state == "good":
+        return _WIRE_GOOD
+    return _WIRE_UNRELIABLE  # no_person (nothing draws, but stay neutral)
+
+
+def root_cause(
+    result: ScoringResult,
+    depth_m: float | None,
+    cfg: ScoringConfig,
+    landmarks: Sequence[Landmark] | None,
+) -> dict[str, object] | None:
+    """The one actionable cause for the status-badge pill: what is wrong and
+    what to do about it. The geometric boundary check wins first — a head
+    cropped by the top edge is visible and fixable regardless of the scoring
+    verdict — then the Unreliable reason. None when the frame is scored and
+    in frame."""
+    if landmarks is not None and head_clipped_top(landmarks):
+        return {"title": "top edge clipped", "action": "tilt camera up", "edge": "top"}
+    if isinstance(result, Unreliable):
+        if result.reason is UnreliableReason.NO_POSE:
+            return {"title": "no person seen", "action": "sit fully in frame", "edge": None}
+        if result.reason is UnreliableReason.LOW_VISIBILITY:
+            return {"title": "low confidence", "action": "sit facing the camera", "edge": None}
+        if result.reason is UnreliableReason.DEPTH_OUT_OF_BAND:
+            if depth_m is not None and depth_m < cfg.depth_min_m:
+                return {"title": "person too close", "action": "step back", "edge": None}
+            return {"title": "person too far", "action": "step closer", "edge": None}
+        return {"title": "depth unreadable", "action": "check the camera view", "edge": None}
+    return None
 
 
 def low_visibility_warning(
@@ -135,18 +192,6 @@ def placement_warnings(
     return tuple(warnings)
 
 
-def _hips_below_floor(
-    landmarks: Sequence[Landmark] | None, cfg: ScoringConfig
-) -> bool:
-    """True when either hip landmark sits below the visibility floor."""
-    if landmarks is None:
-        return False
-    return any(
-        landmarks[i].visibility < cfg.visibility_floor
-        for i in (LEFT_HIP, RIGHT_HIP)
-    )
-
-
 def _audio_fields(audio: NudgeSink | None) -> dict[str, object]:
     """AudioWorker.status fields for the snapshot; stubs without a status
     property report the audio worker as not ready."""
@@ -198,14 +243,7 @@ class PosturePipeline:
             shoulder_level_deg=config.scoring.shoulder_level_deg,
             hysteresis_margin_deg=config.scoring.hysteresis_margin_deg,
             visibility_floor=config.scoring.visibility_floor,
-            trunk_lean_required=config.scoring.trunk_lean_required,
         )
-        self._timings: dict[str, float | bool] = {
-            "bad_sustain_s": config.state.bad_sustain_s,
-            "good_confirm_s": config.state.good_confirm_s,
-            "positive_every_s": config.feedback.positive_chime.every_seconds,
-            "positive_enabled": config.feedback.positive_chime.enabled,
-        }
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fps = 0.0
@@ -221,52 +259,15 @@ class PosturePipeline:
         """Run the full frame path once. Clock is the frame timestamp, keeping
         state-machine timelines reproducible in tests."""
         detection = self._detector(frame)
-        scoring_cfg = (
-            self._feedback.scoring_config(self._config.scoring)
-            if self._feedback is not None and hasattr(self._feedback, "scoring_config")
-            else self._config.scoring
-        )
-        result = score_pose(detection.landmarks, detection.depth_m, scoring_cfg)
-        previous = self._state_machine.state
+        result = score_pose(detection.landmarks, detection.depth_m, self._config.scoring)
         transition = self._state_machine.update(result, frame.timestamp_s)
-        if transition.state is not previous:
-            logger.info(
-                "posture state: %s -> %s", previous.value, transition.state.value
-            )
         if transition.nudge is not Nudge.NONE:
             # Mode filter is the single enforcement point (spec): the machine
             # keeps sole emission authority; silent/chime-only drop the audio
             # here while state logic advances identically.
             allowed = self._feedback is None or self._feedback.allows(transition.nudge)
-            mode = (
-                self._feedback.to_payload()["mode"]
-                if self._feedback is not None
-                else "always"
-            )
             if allowed and self._audio is not None:
                 self._audio.enqueue(transition.nudge)
-                if transition.nudge is Nudge.POSITIVE_CHIME:
-                    sounds = getattr(self._audio, "_sounds", {})
-                    has_positive_voice = (
-                        hasattr(self._audio, "_sounds") and Nudge.POSITIVE_VOICE in sounds
-                    )
-                    if has_positive_voice and (
-                        self._feedback is None or self._feedback.allows(Nudge.POSITIVE_VOICE)
-                    ):
-                        self._audio.enqueue(Nudge.POSITIVE_VOICE)
-                logger.info("nudge %s (mode %s): queued", transition.nudge.value, mode)
-            else:
-                reason = (
-                    "no audio sink wired"
-                    if self._audio is None
-                    else f"muted by mode {mode}"
-                )
-                logger.info(
-                    "nudge %s (mode %s): NOT played (%s)",
-                    transition.nudge.value,
-                    mode,
-                    reason,
-                )
             self._nudge_event = self._emit_nudge_event(transition.nudge, allowed)
         self._update_fps(frame.timestamp_s)
         if self._hub is not None:
@@ -279,16 +280,11 @@ class PosturePipeline:
         """Build the visible reminder event. Voice events carry the prompt text
         so the banner can read 'Reminder: <text>'; sequence numbers come from
         the hub when wired so snapshot and test-endpoint events never collide."""
-        text = None
-        if self._feedback is not None:
-            if nudge is Nudge.VOICE:
-                text = self._feedback.prompt_text()
-            elif nudge in (Nudge.POSITIVE_CHIME, Nudge.POSITIVE_VOICE):
-                text = (
-                    self._feedback.positive_text()
-                    if hasattr(self._feedback, "positive_text")
-                    else None
-                )
+        text = (
+            self._feedback.prompt_text()
+            if nudge is Nudge.VOICE and self._feedback is not None
+            else None
+        )
         if self._hub is not None:
             return self._hub.next_nudge_event(
                 nudge.value, muted=not allowed, text=text
@@ -313,49 +309,14 @@ class PosturePipeline:
         angles: ScoredPosture | None = result if isinstance(result, ScoredPosture) else None
         trunk_deg = angles.trunk_lean_deg if angles else None
         trunk_note: str | None = None
-        if (
-            angles is not None
-            and not self._config.scoring.trunk_lean_required
-            and _hips_below_floor(detection.landmarks, self._config.scoring)
-        ):
-            # Trunk lean optional + hips invisible: the measured angle is
+        if angles is not None and not angles.trunk_lean_available:
+            # Trunk lean unavailable (hips below the visibility floor, in either
+            # the optional or degraded-feedback mode): the measured angle is
             # garbage, so report it as unavailable instead of a number.
             trunk_deg = None
             trunk_note = "\u2014 trunk lean unavailable (hips not visible)"
         camera = self._source.status
         depth_m = detection.depth_m
-        bad_streak_s, good_streak_s = self._state_machine.streaks(frame.timestamp_s)
-        active_thresholds = self._thresholds
-        active_timings = self._timings
-        if self._feedback is not None:
-            fb = self._feedback.to_payload()
-            active_thresholds = ScoringThresholds(
-                head_forward_deg=float(
-                    fb.get("head_forward_deg", self._thresholds.head_forward_deg)
-                ),
-                trunk_lean_deg=float(fb.get("trunk_lean_deg", self._thresholds.trunk_lean_deg)),
-                head_tilt_deg=float(fb.get("head_tilt_deg", self._thresholds.head_tilt_deg)),
-                shoulder_level_deg=float(
-                    fb.get("shoulder_level_deg", self._thresholds.shoulder_level_deg)
-                ),
-                hysteresis_margin_deg=float(
-                    fb.get("hysteresis_margin_deg", self._thresholds.hysteresis_margin_deg)
-                ),
-                visibility_floor=self._thresholds.visibility_floor,
-                trunk_lean_required=self._thresholds.trunk_lean_required,
-            )
-            active_timings = {
-                "bad_sustain_s": float(
-                    fb.get("bad_sustain_s", self._timings.get("bad_sustain_s", 1.0))
-                ),
-                "good_confirm_s": float(
-                    fb.get("good_confirm_s", self._timings.get("good_confirm_s", 1.5))
-                ),
-                "positive_every_s": float(
-                    fb.get("positive_every_s", self._timings.get("positive_every_s", 15.0))
-                ),
-                "positive_enabled": self._timings.get("positive_enabled", True),
-            }
         snapshot = MetricsSnapshot(
             state=state.value,
             fps=self._fps,
@@ -377,27 +338,34 @@ class PosturePipeline:
                 else ()
             ),
             **_audio_fields(self._audio),
-            thresholds=active_thresholds,
+            thresholds=self._thresholds,
             unreliable_detail=(
                 result.detail if isinstance(result, Unreliable) and result.detail else None
             ),
             trunk_note=trunk_note,
+            root_cause=root_cause(
+                result, depth_m, self._config.scoring, detection.landmarks
+            ),
             feedback=(
                 self._feedback.to_payload()
                 if self._feedback is not None
                 else None
             ),
             nudge_event=self._nudge_event,
-            timings=active_timings,
-            bad_streak_s=bad_streak_s,
-            good_streak_s=good_streak_s,
         )
         self._hub.publish_metrics(snapshot)
         state_text = state.value.replace("_", " ")
         depth_text = f"depth {depth_m:.1f} m" if depth_m is not None else "depth -"
         reason_text = result.detail if isinstance(result, Unreliable) else ""
         self._hub.publish_video(
-            self._renderer(frame.color, detection.landmarks, state_text, depth_text, reason_text)
+            self._renderer(
+                frame.color,
+                detection.landmarks,
+                state_text,
+                depth_text,
+                reason_text,
+                wire_color=wire_color_for(state.value, result, self._config.scoring),
+            )
         )
 
     # -- fps and threaded run ---------------------------------------------------------

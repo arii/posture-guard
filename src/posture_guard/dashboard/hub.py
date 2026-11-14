@@ -67,6 +67,7 @@ class MetricsSnapshot:
     landmarks: tuple[tuple[float, float], ...] = field(default=())
     thresholds: ScoringThresholds | None = None
     unreliable_detail: str | None = None
+    root_cause: dict[str, object] | None = None  # {"title", "action", "edge"}
     trunk_note: str | None = None  # set when trunk lean is measured as unavailable
     feedback: dict[str, object] | None = None  # RuntimeFeedback.to_payload()
     nudge_event: dict[str, object] | None = None  # {"kind": "chime"|"voice", "seq": n}
@@ -108,6 +109,7 @@ class MetricsSnapshot:
             "landmarks": [[round(x, 4), round(y, 4)] for x, y in self.landmarks],
             "thresholds": self.thresholds.to_payload() if self.thresholds else None,
             "unreliable_detail": self.unreliable_detail,
+            "root_cause": self.root_cause,
             "trunk_note": self.trunk_note,
             "feedback": self.feedback,
             "nudge_event": self.nudge_event,

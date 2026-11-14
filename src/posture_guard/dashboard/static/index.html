@@ -26,7 +26,19 @@
   .badge.good       { background: var(--good); color: #0b2412; }
   .badge.bad_chime,
   .badge.bad_voice  { background: var(--warn); color: #3a2503; }
-  .badge.unreliable { background: var(--bad); color: #3a0b0b; }
+  /* Demoted (demo feedback): tracking status is a small amber pill, not the
+     alarming full-size red badge, and the video carries no banner at all —
+     the detail lives in the reliability line below the metrics. */
+  .badge.unreliable {
+    background: var(--warn); color: #3a2503; font-size: 11px;
+    padding: 2px 10px; text-transform: none; letter-spacing: 0.03em;
+  }
+  /* Root-cause pill: the exact failure with its action, crimson for
+     action-needed (extends the demoted tracking pill, never the old banner). */
+  .badge.cause {
+    background: var(--bad); color: #2b0707; font-size: 11px;
+    padding: 2px 10px; letter-spacing: 0.04em;
+  }
   .badge.no_person  { background: #3a4250; color: var(--text); }
   /* Synchronized nudge event: the badge flashes once in the channel's color. */
   @keyframes nudge-pulse {
@@ -49,10 +61,26 @@
   @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
   .video-wrap {
     position: relative; background: #000; border-radius: 8px;
-    overflow: hidden; border: 1px solid var(--line);
+    overflow: hidden; border: 2px solid var(--line);
+    transition: border-color 0.2s linear;
   }
   .video-wrap img, .video-wrap canvas { display: block; width: 100%; height: auto; }
   .video-wrap canvas { position: absolute; inset: 0; }
+  /* Mini-HUD (PiP): the feed collapses into a 120x120 corner widget — status
+     ring (the border, recolored to the wireframe state) plus a 2-axis
+     inclinometer dot. Click it or the header HUD button to toggle. */
+  .video-wrap.pip {
+    position: fixed; right: 16px; bottom: 16px; width: 120px; height: 120px;
+    z-index: 20; cursor: pointer; border-width: 3px;
+  }
+  .video-wrap.pip img, .video-wrap.pip canvas { height: 100%; object-fit: cover; }
+  #hud-dot {
+    display: none; position: absolute; width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; border: 1.5px solid #0b0e13;
+    transform: translate(-50%, -50%); box-shadow: 0 0 6px rgba(0,0,0,.8);
+    pointer-events: none;
+  }
+  .video-wrap.pip #hud-dot { display: block; }
   .panel {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 8px; padding: 14px 16px;
@@ -62,12 +90,33 @@
     color: var(--muted); margin: 0 0 10px;
   }
   .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* Layout consolidation: when tracking is unreliable the cards dim and the
+     reason renders beneath them, so stale numbers never read as live truth. */
+  .tiles.dimmed { opacity: 0.45; filter: saturate(0.6); transition: opacity 0.2s linear; }
+  #metrics-note { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 14px; }
+  #metrics-note.unreliable { color: var(--warn); }
   .tile { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
   .tile .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   .tile .value { font-size: 26px; font-weight: 600; }
   .tile .value.bad { color: var(--warn); }
   .tile .value.good { color: var(--good); }
   .tile .band { font-size: 11px; color: var(--muted); margin-top: 2px; min-height: 14px; }
+  /* Bullet gauge: one horizontal bar per tile, boundary tick at 2/3 of the
+     scale (scale = 1.5x the limit), mirroring the needle's green/amber split. */
+  .bullet {
+    position: relative; height: 8px; margin-top: 8px;
+    border-radius: 4px; background: var(--panel); border: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .bullet .bullet-fill {
+    height: 100%; width: 0%; background: var(--good); border-radius: 4px;
+    transition: width 0.15s linear, background-color 0.15s linear;
+  }
+  .bullet .bullet-tick {
+    position: absolute; top: -2px; bottom: -2px; left: 66.7%; width: 2px;
+    background: var(--muted); opacity: 0.7;
+  }
+  .bullet.over .bullet-fill { background: var(--warn); }
   .status-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; }
   .status-row .stat b { font-weight: 600; }
   #warnings:empty { display: none; }
@@ -96,6 +145,13 @@
     cursor: pointer; width: 100%;
   }
   button:disabled { opacity: 0.5; cursor: default; }
+  /* Header toggle sits in the flex header, so it opts out of the full-width
+     button style above. */
+  #pip-toggle {
+    width: auto; flex: none; margin: 0; padding: 8px 14px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line);
+  }
   .btn-row { display: flex; gap: 8px; margin-top: 12px; }
   .btn-row button { margin-top: 0; }
   .btn-row button.secondary {
@@ -122,74 +178,6 @@
   .session-note { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
   #feedback-error { color: var(--bad); font-size: 12.5px; margin-top: 8px; }
   #feedback-error:empty { display: none; }
-
-  /* Fill-on-Hold Button: solid color sweeps across rectangular button like a loading bar until 100% and triggers */
-  .fill-hold-btn {
-    position: relative;
-    overflow: hidden;
-    height: 44px;
-    border-radius: 8px;
-    background: #111419;
-    border: 1px solid var(--line);
-    display: flex;
-    align-items: center;
-    padding: 0 14px;
-    box-sizing: border-box;
-    margin-top: 12px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  .fill-hold-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 0%;
-    background: var(--good);
-    opacity: 0.92;
-    pointer-events: none;
-    transition: width 0.08s linear;
-  }
-  .fill-hold-btn.bad .fill-hold-fill {
-    background: #ff5c5c;
-  }
-  .fill-hold-btn.warn .fill-hold-fill {
-    background: #ffb340;
-  }
-  .fill-hold-btn.good .fill-hold-fill {
-    background: #4cc36a;
-  }
-  .fill-hold-btn.idle .fill-hold-fill {
-    background: #232832;
-  }
-  .fill-hold-inner {
-    position: relative;
-    z-index: 2;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text);
-  }
-  .fill-hold-btn.bad .fill-hold-inner,
-  .fill-hold-btn.warn .fill-hold-inner {
-    color: #ffffff;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.85);
-  }
-  .fill-hold-btn.good .fill-hold-inner {
-    color: #0b2412;
-    text-shadow: none;
-  }
-  .fill-hold-btn.triggered {
-    animation: fill-trigger-pop 0.7s ease-out 1;
-  }
-  @keyframes fill-trigger-pop {
-    0% { transform: scale(0.98); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.95); }
-    50% { transform: scale(1.02); box-shadow: 0 0 0 14px rgba(255, 255, 255, 0); }
-    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
-  }
 </style>
 </head>
 <body>
@@ -199,22 +187,25 @@
   <span id="nudge-event">nudge</span>
   <span class="stat"><b id="fps">-</b> fps</span>
   <span class="stat">depth <b id="depth">-</b></span>
+  <button id="pip-toggle" class="secondary" title="Collapse the video into a 120x120 corner HUD (status ring + inclinometer dot)" style="margin-left:auto">&#9788; Mini HUD</button>
 </header>
 <main>
   <div class="video-wrap">
     <img id="video" src="/video.mjpg" alt="Live camera view with posture overlay">
     <canvas id="overlay"></canvas>
+    <div id="hud-dot" title="Inclinometer: horizontal = trunk lean, vertical = head forward"></div>
   </div>
   <div>
     <div id="warnings"></div>
     <div class="panel">
       <h2>Posture metrics</h2>
       <div class="tiles">
-        <div class="tile"><div class="label">Head forward</div><div class="value" id="m-head_forward_deg">-</div><div class="band" id="b-head_forward_deg"></div></div>
-        <div class="tile"><div class="label">Trunk lean</div><div class="value" id="m-trunk_lean_deg">-</div><div class="band" id="b-trunk_lean_deg"></div></div>
-        <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div><div class="band" id="b-head_tilt_deg"></div></div>
-        <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div><div class="band" id="b-shoulder_level_deg"></div></div>
+        <div class="tile"><div class="label">Head forward</div><div class="value" id="m-head_forward_deg">-</div><div class="bullet" id="bar-head_forward_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-head_forward_deg"></div></div>
+        <div class="tile"><div class="label">Trunk lean</div><div class="value" id="m-trunk_lean_deg">-</div><div class="bullet" id="bar-trunk_lean_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-trunk_lean_deg"></div></div>
+        <div class="tile"><div class="label">Head tilt</div><div class="value" id="m-head_tilt_deg">-</div><div class="bullet" id="bar-head_tilt_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-head_tilt_deg"></div></div>
+        <div class="tile"><div class="label">Shoulder level</div><div class="value" id="m-shoulder_level_deg">-</div><div class="bullet" id="bar-shoulder_level_deg" title="boundary"><div class="bullet-fill"></div><div class="bullet-tick"></div></div><div class="band" id="b-shoulder_level_deg"></div></div>
       </div>
+      <div id="metrics-note"></div>
       <div class="status-row">
         <span class="stat">camera <b id="camera">-</b><span id="camera-detail" class="stat"></span></span>
         <span class="stat">audio <b id="audio">-</b><span id="audio-detail" class="stat"></span><span id="audio-error" class="stat"></span></span>
@@ -225,7 +216,7 @@
          (feat/posture-needle). Math mirrors src/posture_guard/dashboard/needle.py. -->
     <div class="panel" id="needle-panel" style="margin-top: 16px">
       <h2>Posture needle</h2>
-      <svg id="needle-gauge" viewBox="0 0 200 142" style="width:100%;height:auto;display:block" role="img" aria-label="Composite posture score: needle sweeps green (good) to red (bad, past a threshold)">
+      <svg id="needle-gauge" viewBox="0 0 200 142" style="width:100%;height:auto;display:block" role="img" aria-label="Composite posture score: needle sweeps green (good) to red (over every threshold band)">
         <path d="M14 100 A 86 86 0 0 1 57 25.5" fill="none" stroke="#4cc36a" stroke-width="14" stroke-linecap="butt"/>
         <path d="M57 25.5 A 86 86 0 0 1 143 25.5" fill="none" stroke="#ffb340" stroke-width="14" stroke-linecap="butt"/>
         <path d="M143 25.5 A 86 86 0 0 1 186 100" fill="none" stroke="#ff5c5c" stroke-width="14" stroke-linecap="butt"/>
@@ -235,14 +226,22 @@
         <circle cx="100" cy="100" r="7" fill="#e8ebf0"/>
         <text id="needle-score" x="100" y="134" text-anchor="middle" font-size="17" font-weight="600" fill="#e8ebf0">--</text>
         <text x="16" y="119" font-size="10" fill="#4cc36a">good</text>
-        <text x="184" y="119" font-size="10" fill="#ff5c5c" text-anchor="end">bad</text>
+        <text x="184" y="119" font-size="10" fill="#ff5c5c" text-anchor="end">over</text>
       </svg>
-      <!-- Fill-on-Hold Button: solid color sweeps across rectangular button like a loading bar until 100% and triggers -->
-      <div id="fill-hold-btn" class="fill-hold-btn idle" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-        <div id="fill-hold-fill" class="fill-hold-fill"></div>
-        <div class="fill-hold-inner">
-          <span id="fill-hold-text">Posture Signal</span>
-          <span id="fill-hold-pct">0%</span>
+      <!-- Grace ring: starts draining as soon as any metric drifts past its
+           threshold (amber wireframe), before the state machine confirms BAD —
+           the self-correct window. Once BAD confirms, the linear hold bar below
+           takes over the countdown. -->
+      <div id="grace-ring" style="display:none; margin-top:10px; align-items:center; gap:12px">
+        <svg width="40" height="40" viewBox="0 0 40 40" role="img" aria-label="Time left to self-correct before posture reminders escalate">
+          <circle cx="20" cy="20" r="16" fill="none" stroke="var(--line)" stroke-width="4"/>
+          <circle id="grace-arc" cx="20" cy="20" r="16" fill="none" stroke="#ffb340" stroke-width="4"
+                  stroke-linecap="round" stroke-dasharray="100.53" stroke-dashoffset="0"
+                  transform="rotate(-90 20 20)"/>
+        </svg>
+        <div>
+          <div style="font-size:12px; color:var(--muted)">Self-correct before the voice reminder</div>
+          <div id="grace-seconds" style="font-size:18px; font-weight:600">--s</div>
         </div>
       </div>
       <div id="hold-countdown" style="display:none; margin-top:10px">
@@ -254,14 +253,17 @@
     </div>
     <div class="panel" style="margin-top: 16px">
       <h2>Camera placement</h2>
-      <ul class="guide">
-        <li>Person fully in frame, facing the camera</li>
-        <li>Mount the camera HIGH — on a shelf or wall mount roughly 0.4&ndash;0.5&nbsp;m above head height — and tilt it down about 45&deg; at your mid-torso. At the normal ~0.6&ndash;0.8&nbsp;m working distance this fits head and hips in frame</li>
-        <li>Alternative for deep desks: sit 1.0&ndash;1.5&nbsp;m away with the camera at chest/neck height aimed at mid-torso</li>
-        <li>USB 3 port for stable depth</li>
-      </ul>
+      <!-- Collapsed by default to keep the first screen about posture, not
+           setup; the JS auto-expands on first launch until tracking is
+           confirmed, and again whenever tracking stays UNRELIABLE > 5s. -->
       <details class="guide-details" id="placement-guide">
-        <summary>Placement diagrams (top view and side view)</summary>
+        <summary>Placement guide &amp; diagrams (top view and side view)</summary>
+        <ul class="guide">
+          <li>Person fully in frame, facing the camera</li>
+          <li>Mount the camera HIGH — on a shelf or wall mount roughly 0.4&ndash;0.5&nbsp;m above head height — and tilt it down about 45&deg; at your mid-torso. At the normal ~0.6&ndash;0.8&nbsp;m working distance this fits head and hips in frame</li>
+          <li>Alternative for deep desks: sit 1.0&ndash;1.5&nbsp;m away with the camera at chest/neck height aimed at mid-torso</li>
+          <li>USB 3 port for stable depth</li>
+        </ul>
         <svg class="scene" id="placement-guide-top" viewBox="0 0 880 300" role="img" aria-label="Top view: camera positions by angle from the user's facing direction">
           <!-- desk edge -->
           <rect x="180" y="24" width="520" height="14" rx="3" fill="#232a34"/>
@@ -335,8 +337,9 @@
           <text x="470" y="240" class="lbl-sm">head &#10003; shoulders &#10003; hips &#10003;</text>
         </svg>
       </details>
-      <button id="test-nudge">&#9654; Test reminder</button>
-      <a href="/docs" class="stat" style="margin-left: 12px">How it works &rarr;</a>
+      <!-- One test control for the current mode: chime_and_voice plays both,
+           chime_only the chime, silent nothing (the tooltip explains). -->
+      <a href="/docs" class="stat">How it works &rarr;</a>
     </div>
     <div class="panel" style="margin-top: 16px">
       <h2>Feedback</h2>
@@ -345,69 +348,22 @@
         <label><input type="radio" name="feedback-mode" value="chime_only"> Chime only</label>
         <label><input type="radio" name="feedback-mode" value="silent"> Silent</label>
       </div>
-      <div class="btn-row">
-        <button id="play-chime" class="secondary">&#9835; Play chime</button>
-        <button id="play-voice" class="secondary">&#128483; Speak slouch</button>
-        <button id="play-positive" class="secondary" style="border-color:#4cc36a; color:#4cc36a">&#10003; Test praise</button>
-      </div>
       <div class="feedback-form">
-        <h3 style="font-size:13px; color:var(--text); margin:8px 0 4px">Voice prompts</h3>
-        <label for="set-chime_text">Slouch reminder text</label>
+        <label for="set-chime_text">Spoken prompt text</label>
         <input type="text" id="set-chime_text" maxlength="120">
         <label for="set-positive_voice_text">Good posture praise text</label>
         <input type="text" id="set-positive_voice_text" maxlength="120">
-
-        <h3 style="font-size:13px; color:var(--text); margin:12px 0 4px">Timings &amp; delays</h3>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
-          <div>
-            <label for="set-bad_sustain_s">Slouch to chime (s)</label>
-            <input type="number" id="set-bad_sustain_s" min="0.2" step="0.2">
-          </div>
-          <div>
-            <label for="set-voice_delay_s">Voice delay (s)</label>
-            <input type="number" id="set-voice_delay_s" min="1" step="0.5">
-          </div>
-          <div>
-            <label for="set-good_confirm_s">Good confirm (s)</label>
-            <input type="number" id="set-good_confirm_s" min="0.2" step="0.2">
-          </div>
-          <div>
-            <label for="set-positive_every_s">Reward interval (s)</label>
-            <input type="number" id="set-positive_every_s" min="1" step="1">
-          </div>
-          <div>
-            <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
-            <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
-          </div>
-        </div>
-
-        <h3 style="font-size:13px; color:var(--text); margin:12px 0 4px">Posture sensitivity thresholds</h3>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
-          <div>
-            <label for="set-head_forward_deg">Head forward (&deg;)</label>
-            <input type="number" id="set-head_forward_deg" min="1" step="1">
-          </div>
-          <div>
-            <label for="set-trunk_lean_deg">Trunk lean (&deg;)</label>
-            <input type="number" id="set-trunk_lean_deg" min="1" step="1">
-          </div>
-          <div>
-            <label for="set-head_tilt_deg">Head tilt (&deg;)</label>
-            <input type="number" id="set-head_tilt_deg" min="1" step="1">
-          </div>
-          <div>
-            <label for="set-shoulder_level_deg">Shoulder level (&deg;)</label>
-            <input type="number" id="set-shoulder_level_deg" min="1" step="1">
-          </div>
-          <div style="grid-column: span 2">
-            <label for="set-hysteresis_margin_deg">Hysteresis margin (&deg;)</label>
-            <input type="number" id="set-hysteresis_margin_deg" min="0.5" step="0.5">
-          </div>
-        </div>
-
-        <div class="btn-row" style="margin-top:12px"><button id="apply-settings">Apply settings</button></div>
+        <label for="set-voice_delay_s">Voice delay (s)</label>
+        <input type="number" id="set-voice_delay_s" min="1" step="0.5">
+        <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
+        <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
+        <div class="btn-row">
+        <button id="apply-settings">Apply settings</button>
+        <button id="test-alert" class="secondary" title="Plays what the current mode would play: chime_and_voice plays both, chime_only the chime, silent nothing">&#9654; Test alert</button>
+        <button id="test-praise" class="secondary" style="border-color:#4cc36a; color:#4cc36a">&#10003; Test praise</button>
+      </div>
         <div id="feedback-error"></div>
-        <div class="session-note">Settings apply immediately but are session-only &mdash; tweak live without restarting.</div>
+        <div class="session-note">Settings apply immediately but are session-only &mdash; they reset on restart (config.yaml keeps its defaults).</div>
       </div>
     </div>
   </div>
@@ -422,7 +378,7 @@ const badge = document.getElementById("state-badge");
 const nudgeEventEl = document.getElementById("nudge-event");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
-const last = { landmarks: null };
+const last = { landmarks: null, state: null, metrics: null, cause: null };
 let thresholds = null; // scoring thresholds from the server, never hardcoded
 let lastNudgeSeq = 0;  // sequence-numbered nudge events re-trigger the banner
 let nudgeEventTimer = null;
@@ -437,8 +393,58 @@ function metric(id, value) {
   const outside = value !== null && limit !== undefined && Math.abs(value) >= limit;
   el.classList.toggle("bad", outside);
   el.classList.toggle("good", value !== null && limit !== undefined && !outside);
+  // Bullet gauge replaces the static "good within ±X°" text: the boundary
+  // tick sits at 2/3 of a 1.5x-limit scale, so breach lands past the tick and
+  // the fill turns amber — the same green/amber mapping as the needle.
+  const bar = document.getElementById("bar-" + id);
+  if (bar) {
+    if (limit === undefined) {
+      bar.style.opacity = "0.35";
+      bar.firstElementChild.style.width = "0%";
+      bar.classList.remove("over");
+    } else {
+      bar.style.opacity = "1";
+      bar.title = "boundary \u00B1" + limit + "\u00B0";
+      const frac = value === null ? 0 : Math.min(1, Math.abs(value) / (limit * 1.5));
+      bar.firstElementChild.style.width = (100 * frac).toFixed(1) + "%";
+      bar.classList.toggle("over", outside);
+    }
+  }
   document.getElementById("b-" + id).textContent =
-    limit === undefined ? "" : "good within \u00B1" + limit + "\u00B0";
+    limit === undefined ? "waiting for thresholds" : "";
+}
+
+// One reliability signal, one color: the wireframe stroke matches the header
+// pill. Slate = do not trust, crimson = confirmed breach, amber = drifting
+// past a threshold before the state machine confirms it, emerald = good.
+// Colors mirror pipeline.wire_color_for (pipeline.py) so the MJPEG skeleton
+// and the canvas skeleton never contradict.
+function wireStyle() {
+  if (last.state === "unreliable") return { color: "#8b95a3", dash: [9, 6] };
+  if (last.state === "bad_chime" || last.state === "bad_voice")
+    return { color: "#ef4444", dash: null };
+  if (thresholds && last.metrics) {
+    const drifting = Object.entries(last.metrics).some(([key, value]) =>
+      value !== null && thresholds[key] !== undefined &&
+      Math.abs(value) >= thresholds[key]
+    );
+    if (drifting) return { color: "#f59e0b", dash: null };
+  }
+  if (last.state === "good") return { color: "#10b981", dash: null };
+  return { color: "#8b95a3", dash: null }; // no_person: nothing draws anyway
+}
+
+function drawEdgeVignette(w, h) {
+  // Red glow along the border that clips a keypoint (top edge check from the
+  // server's boundary check — the high-mount framing failure).
+  if (!last.cause || last.cause.edge !== "top") return;
+  const ctx = overlay.getContext("2d");
+  const depth = h * 0.14;
+  const glow = ctx.createLinearGradient(0, 0, 0, depth);
+  glow.addColorStop(0, "rgba(239, 68, 68, 0.85)");
+  glow.addColorStop(1, "rgba(239, 68, 68, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, depth);
 }
 
 function drawSkeleton() {
@@ -449,67 +455,52 @@ function drawSkeleton() {
   if (!last.landmarks) return;
   const pts = {};
   last.landmarks.forEach(([x, y], i) => { pts[NAMES[i]] = [x * w, y * h]; });
-  ctx.strokeStyle = "#4cc36a"; ctx.lineWidth = 3;
+  const wire = wireStyle();
+  ctx.strokeStyle = wire.color;
+  ctx.lineWidth = 3;
+  if (wire.dash) ctx.setLineDash(wire.dash);
   SKELETON.forEach(([a, b]) => {
     ctx.beginPath(); ctx.moveTo(...pts[a]); ctx.lineTo(...pts[b]); ctx.stroke();
   });
-  ctx.fillStyle = "#4cc36a";
+  ctx.setLineDash([]);
+  ctx.fillStyle = wire.color;
   Object.values(pts).forEach(([x, y]) => {
     ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
   });
+  drawEdgeVignette(w, h);
 }
 
-let feedbackInitialized = false;
+function setSetting(id, value) {
+  // Server-owned values seed the form; a field being edited is never clobbered.
+  const el = document.getElementById(id);
+  if (el && document.activeElement !== el) el.value = value;
+}
 
 function applyFeedback(fb) {
   if (!fb) return;
   const modeInput = document.querySelector(
     'input[name="feedback-mode"][value="' + fb.mode + '"]'
   );
-  if (modeInput && document.activeElement !== modeInput) modeInput.checked = true;
-  if (!feedbackInitialized) {
-    const fields = [
-      "chime_text", "positive_voice_text", "voice_delay_s", "voice_repeat_cooldown_s",
-      "bad_sustain_s", "good_confirm_s", "positive_every_s",
-      "head_forward_deg", "trunk_lean_deg", "head_tilt_deg", "shoulder_level_deg", "hysteresis_margin_deg"
-    ];
-    fields.forEach((k) => {
-      const el = document.getElementById("set-" + k);
-      if (el && el.value === "" && fb[k] !== undefined) el.value = fb[k];
-    });
-    feedbackInitialized = true;
-  }
+  if (modeInput) modeInput.checked = true;
+  setSetting("set-chime_text", fb.chime_text);
+  setSetting("set-positive_voice_text", fb.positive_voice_text);
+  setSetting("set-voice_delay_s", fb.voice_delay_s);
+  setSetting("set-voice_repeat_cooldown_s", fb.voice_repeat_cooldown_s);
 }
 
 function applyNudgeEvent(event) {
   if (!event || event.seq === lastNudgeSeq) return;
   lastNudgeSeq = event.seq;
   const muted = event.muted ? " (muted)" : "";
-  const reward = event.kind === "positive_chime" || event.kind === "positive_voice";
-  if (reward && window.noteRewardChime) window.noteRewardChime();
   nudgeEventEl.textContent = reminderLabel(event) + muted;
-  // The reward is good news: green banner, never the amber reminder style.
-  nudgeEventEl.style.background = reward ? "#4cc36a" : "";
-  nudgeEventEl.style.color = reward ? "#0b2412" : "";
   nudgeEventEl.classList.add("show");
   badge.classList.remove("pulse");
   void badge.offsetWidth; // restart the animation on repeated nudges
   badge.classList.add("pulse");
   pulseActive = true;
-  if (window.triggerFillFlash) window.triggerFillFlash();
-  const fill = document.getElementById("fill-hold-fill");
-  const textEl = document.getElementById("fill-hold-text");
-  const pctEl = document.getElementById("fill-hold-pct");
-  const btn = document.getElementById("fill-hold-btn");
-  if (btn) btn.className = "fill-hold-btn " + (reward ? "good" : event.kind === "voice" ? "warn" : "bad") + " triggered";
-  if (fill) fill.style.width = "100%";
-  if (textEl) textEl.textContent = (reward ? "" : "⚡ ") + reminderLabel(event) + muted;
-  if (pctEl) pctEl.textContent = "100%";
   clearTimeout(nudgeEventTimer);
   nudgeEventTimer = setTimeout(() => {
     nudgeEventEl.classList.remove("show");
-    nudgeEventEl.style.background = "";
-    nudgeEventEl.style.color = "";
     badge.classList.remove("pulse");
     pulseActive = false;
   }, 2000);
@@ -519,15 +510,31 @@ function reminderLabel(event) {
   // Plain language: every reminder names itself. Voice shows the spoken text.
   if (event.kind === "voice") return "Reminder: " + (event.text || "spoken prompt");
   if (event.kind === "chime") return "Reminder: chime";
-  if (event.kind === "positive_chime" || event.kind === "positive_voice") {
-    return "Nice posture ✓" + (event.text ? " — " + event.text : "");
-  }
+  if (event.kind === "positive_voice") return "Praise: " + (event.text || "spoken praise");
+  if (event.kind === "positive_chime") return "Praise: chime";
   return "Reminder: " + (event.text || event.kind);
 }
 
 function apply(payload) {
-  badge.textContent = payload.state.replace(/_/g, " ");
-  badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
+  // Demoted: unreliable tracking reads as a small amber "tracking partial"
+  // pill instead of a big red state badge; the missing-landmark reason stays
+  // in the reliability line below the metrics. When the server names a single
+  // actionable root cause, the badge carries THAT — failure with its fix —
+  // and the state word moves to the tooltip.
+  const cause = payload.root_cause;
+  if (cause && cause.title) {
+    badge.textContent = cause.title.toUpperCase() + " \u2014 " + cause.action.toUpperCase();
+    badge.title = "state: " + payload.state;
+    badge.className = "badge cause" + (pulseActive ? " pulse" : "");
+  } else {
+    badge.title = "";
+    badge.textContent =
+      payload.state === "unreliable" ? "tracking partial" : payload.state.replace(/_/g, " ");
+    badge.className = "badge " + payload.state + (pulseActive ? " pulse" : "");
+  }
+  last.state = payload.state;
+  last.metrics = payload.metrics;
+  last.cause = cause || null;
   document.getElementById("fps").textContent = payload.fps;
   document.getElementById("depth").textContent =
     payload.depth_m === null ? "-" : payload.depth_m.toFixed(1) + " m";
@@ -600,36 +607,26 @@ async function post(url, body) {
   return response.json();
 }
 
-document.getElementById("test-nudge").addEventListener("click", async (event) => {
+// One test control plays whatever the current mode would play (/nudge/test
+// routes through the same gating as real reminders: chime_and_voice plays
+// both, chime_only the chime, silent nothing).
+const testAlertButton = document.getElementById("test-alert");
+testAlertButton.addEventListener("click", async (event) => {
   const button = event.target;
   button.disabled = true;
   try { await post("/nudge/test"); }
   finally { button.disabled = false; }
 });
 
-document.getElementById("play-chime").addEventListener("click", async (event) => {
+// Test praise plays the positive chime and spoken praise regardless of mode
+// (/nudge/positive is a hardware-verification endpoint, like /nudge/test).
+const testPraiseButton = document.getElementById("test-praise");
+testPraiseButton.addEventListener("click", async (event) => {
   const button = event.target;
   button.disabled = true;
-  try { await post("/nudge/chime"); }
+  try { await post("/nudge/positive"); }
   finally { button.disabled = false; }
 });
-
-document.getElementById("play-voice").addEventListener("click", async (event) => {
-  const button = event.target;
-  button.disabled = true;
-  try { await post("/nudge/voice"); }
-  finally { button.disabled = false; }
-});
-
-const posBtn = document.getElementById("play-positive");
-if (posBtn) {
-  posBtn.addEventListener("click", async (event) => {
-    const button = event.target;
-    button.disabled = true;
-    try { await post("/nudge/positive"); }
-    finally { button.disabled = false; }
-  });
-}
 
 // Mode switches apply at once; text/timings wait for Apply so half-typed
 // prompts never re-render TTS mid-sentence.
@@ -650,33 +647,12 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
   if (text.trim()) body.chime_text = text.trim();
   const posText = document.getElementById("set-positive_voice_text");
   if (posText && posText.value.trim()) body.positive_voice_text = posText.value.trim();
-  const numFields = [
-    "voice_delay_s", "voice_repeat_cooldown_s", "bad_sustain_s", "good_confirm_s", "positive_every_s",
-    "head_forward_deg", "trunk_lean_deg", "head_tilt_deg", "shoulder_level_deg", "hysteresis_margin_deg"
-  ];
-  for (const key of numFields) {
-    const el = document.getElementById("set-" + key);
-    if (el) {
-      const val = parseFloat(el.value);
-      if (!Number.isNaN(val)) body[key] = val;
-    }
+  for (const key of ["voice_delay_s", "voice_repeat_cooldown_s"]) {
+    const value = parseFloat(document.getElementById("set-" + key).value);
+    if (!Number.isNaN(value)) body[key] = value;
   }
-  try {
-    const updated = await post("/feedback/settings", body);
-    if (updated) {
-      Object.keys(updated).forEach((k) => {
-        const el = document.getElementById("set-" + k);
-        if (el && updated[k] !== undefined) el.value = updated[k];
-      });
-      error.style.color = "#4cc36a";
-      error.textContent = "Settings saved!";
-      setTimeout(() => { if (error.textContent === "Settings saved!") error.textContent = ""; }, 2500);
-    }
-  }
-  catch (exc) {
-    error.style.color = "var(--warn)";
-    error.textContent = String(exc.message || exc);
-  }
+  try { await post("/feedback/settings", body); }
+  catch (exc) { error.textContent = String(exc.message || exc); }
 });
 </script>
 <script>
@@ -686,48 +662,24 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
 (function () {
   const BAD_STATES = new Set(["bad_chime", "bad_voice"]);
   const DEFAULT_VOICE_DELAY_S = 10; // feedback.voice_delay_s default (feedback.py)
-  // Gauge thirds, mirroring needle.py: the worst metric's exit fraction maps
-  // to GOOD_END and its enter threshold maps to BAD_START, so green/amber/red
-  // always agrees with the backend good/ok/bad zone.
-  const GOOD_END = 100 / 3, BAD_START = 200 / 3;
   let badStartedAt = null; // ms timestamp when this BAD hold began
   let holdDelayS = null;   // voice delay the bar is currently counting down
-  let smoothScore = null;  // EMA of the needle score (display smoothing only)
-  let currentBand = null;  // good | ok | bad from the smoothed score
-  let lastRewardAt = null; // ms timestamp of the last reward chime event
 
-  window.noteRewardChime = function () { lastRewardAt = Date.now(); };
-
-  function worstSeverity(metrics, thresholds) {
-    if (!metrics || !thresholds) return null;
-    const margin = Number(thresholds.hysteresis_margin_deg) || 0;
-    let worst = null;
-    // Trunk lean counts whenever it has a value: the backend sends None
-    // exactly while the hips are hidden, so a present value is trustworthy.
-    Object.keys(metrics).forEach((key) => {
-      const value = metrics[key];
-      if (value === null || value === undefined) return;
-      const threshold = thresholds[key];
-      if (threshold === null || threshold === undefined || threshold <= 0) return;
-      const sev = Math.abs(value) / threshold;
-      const exitFrac = Math.max(0, (threshold - margin) / threshold);
-      if (worst === null || sev > worst.severity) worst = { severity: sev, exitFrac };
-    });
-    return worst;
+  function severity(value, threshold) {
+    if (value === null || value === undefined || threshold === null ||
+        threshold === undefined || threshold <= 0) return null;
+    return Math.min(1, Math.abs(value) / threshold);
   }
 
   function compositeScore(metrics, thresholds) {
-    const worst = worstSeverity(metrics, thresholds);
-    if (!worst) return null;
-    if (worst.severity <= worst.exitFrac) {
-      return worst.exitFrac > 0 ? GOOD_END * (worst.severity / worst.exitFrac) : 0;
-    }
-    if (worst.severity <= 1) {
-      const span = 1 - worst.exitFrac;
-      return GOOD_END + (BAD_START - GOOD_END) *
-        (span > 0 ? (worst.severity - worst.exitFrac) / span : 1);
-    }
-    return BAD_START + (100 - BAD_START) * Math.min(worst.severity - 1, 1);
+    if (!metrics || !thresholds) return null;
+    let sum = 0, count = 0;
+    Object.keys(metrics).forEach((key) => {
+      const sev = severity(metrics[key], thresholds[key]);
+      if (sev === null) return;
+      sum += sev; count += 1;
+    });
+    return count === 0 ? null : (100 * sum) / count;
   }
 
   function updateNeedle(payload) {
@@ -739,168 +691,74 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
       // No usable metrics (no person, thresholds not yet received).
       panel.style.opacity = "0.45";
       scoreEl.textContent = "--";
-      smoothScore = null;
-      currentBand = null;
       return;
     }
-    // Light display smoothing so one jittery frame never swings the gauge;
-    // the band still settles exactly on the backend zone.
-    smoothScore = smoothScore === null ? score : 0.65 * smoothScore + 0.35 * score;
-    currentBand = smoothScore < GOOD_END ? "good" : smoothScore < BAD_START ? "ok" : "bad";
     // UNRELIABLE keeps the last-known position but dims the gauge.
     panel.style.opacity = payload.state === "unreliable" ? "0.45" : "1";
-    rotor.setAttribute("transform", "rotate(" + (smoothScore * 1.8).toFixed(1) + " 100 100)");
-    scoreEl.textContent = String(Math.round(smoothScore));
+    rotor.setAttribute("transform", "rotate(" + (score * 1.8).toFixed(1) + " 100 100)");
+    scoreEl.textContent = String(Math.round(score));
   }
 
-  let lastState = null;
-  let stateEnteredAt = Date.now();
-  let slouchEnteredAt = null;
-  let flashTimer = null;
-
-  window.triggerFillFlash = function () {
-    const btn = document.getElementById("fill-hold-btn");
-    if (!btn) return;
-    btn.classList.remove("triggered");
-    void btn.offsetWidth; // restart animation
-    btn.classList.add("triggered");
-    clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => btn.classList.remove("triggered"), 800);
-  };
-
-  function updateFillHold(payload) {
-    const btn = document.getElementById("fill-hold-btn");
-    const fill = document.getElementById("fill-hold-fill");
-    const textEl = document.getElementById("fill-hold-text");
-    const pctEl = document.getElementById("fill-hold-pct");
+  function updateCountdown(payload) {
     const wrap = document.getElementById("hold-countdown");
     const label = document.getElementById("hold-countdown-label");
     const bar = document.getElementById("hold-bar");
-    if (!btn || !fill || !textEl || !pctEl) return;
-
-    const now = Date.now();
-    if (payload.state !== lastState) {
-      lastState = payload.state;
-      stateEnteredAt = now;
-      lastRewardAt = null; // leaving GOOD resets the backend reward timer too
-      if (payload.state === "bad_chime" || payload.state === "bad_voice") {
-        window.triggerFillFlash();
-      }
-    }
-
     const isBad = BAD_STATES.has(payload.state);
     if (!isBad) {
       badStartedAt = null; // GOOD/UNRELIABLE reset the hold
-      if (wrap) wrap.style.display = "none";
+      wrap.style.display = "none";
+      return;
     }
+    const delay = (payload.feedback && payload.feedback.voice_delay_s) || DEFAULT_VOICE_DELAY_S;
+    if (badStartedAt === null || holdDelayS !== delay) {
+      badStartedAt = Date.now();
+      holdDelayS = delay;
+    }
+    wrap.style.display = "block";
+    const remaining = Math.max(0, holdDelayS - (Date.now() - badStartedAt) / 1000);
+    label.textContent = "Reminder in " + Math.ceil(remaining) + "s";
+    bar.style.width = (100 * Math.max(0, remaining / holdDelayS)).toFixed(1) + "%";
+  }
 
-    // Hold durations come from the backend config echo, never hardcoded.
-    const timings = payload.timings || {};
-    const badSustainS = Number(timings.bad_sustain_s) || 1.0;
-    const goodConfirmS = Number(timings.good_confirm_s) || 1.5;
+  // Grace ring: the drift window BEFORE the state machine confirms BAD. Any
+  // metric past its threshold starts the ring draining over voice_delay_s, so
+  // the user can self-correct before audio. BAD states hand off to the hold
+  // bar; GOOD/no_person/unreliable reset it. Mirrors the amber wireframe
+  // condition (wireStyle()) so ring and stroke always agree.
+  let graceStartedAt = null;
+  let graceDelayS = null;
+  const GRACE_CIRCUMFERENCE = 100.53; // r=16
 
-    if (payload.state === "no_person") {
-      slouchEnteredAt = null;
-      btn.className = "fill-hold-btn idle";
-      fill.style.width = "0%";
-      textEl.textContent = "Waiting for person — sit in frame";
-      pctEl.textContent = "0%";
-      return;
-    }
+  function isDrifting(payload) {
+    if (!payload.metrics || !payload.thresholds) return false;
+    return Object.entries(payload.metrics).some(([key, value]) =>
+      value !== null && payload.thresholds[key] !== undefined &&
+      Math.abs(value) >= payload.thresholds[key]
+    );
+  }
 
-    if (payload.state === "unreliable") {
-      slouchEnteredAt = null;
-      btn.className = "fill-hold-btn idle";
-      fill.style.width = "0%";
-      textEl.textContent = "Signal unreadable — check camera";
-      pctEl.textContent = "0%";
+  function updateGraceRing(payload) {
+    const wrap = document.getElementById("grace-ring");
+    const arc = document.getElementById("grace-arc");
+    const seconds = document.getElementById("grace-seconds");
+    if (BAD_STATES.has(payload.state) || !isDrifting(payload)) {
+      graceStartedAt = null; // confirmed BAD or recovered: the ring steps aside
+      wrap.style.display = "none";
       return;
     }
-
-    if (payload.state === "bad_voice") {
-      slouchEnteredAt = null;
-      const cooldown = (payload.feedback && payload.feedback.voice_repeat_cooldown_s) || 5.0;
-      const elapsed = (now - stateEnteredAt) / 1000;
-      const pct = Math.min(100, Math.max(0, (elapsed / cooldown) * 100));
-      const rem = Math.max(0, cooldown - elapsed);
-      btn.className = "fill-hold-btn bad";
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = rem > 0 ? "Bad posture hold — Voice repeats in " + rem.toFixed(1) + "s" : "Triggering voice prompt...";
-      pctEl.textContent = Math.round(pct) + "%";
-      if (wrap && label && bar) {
-        wrap.style.display = "block";
-        label.textContent = "Voice repeats in " + Math.ceil(rem) + "s";
-        bar.style.width = (100 - pct).toFixed(1) + "%";
-      }
-      return;
+    const delay = (payload.feedback && payload.feedback.voice_delay_s) || DEFAULT_VOICE_DELAY_S;
+    if (graceStartedAt === null || graceDelayS !== delay) {
+      graceStartedAt = Date.now();
+      graceDelayS = delay;
     }
-
-    if (payload.state === "bad_chime") {
-      slouchEnteredAt = null;
-      const delay = (payload.feedback && payload.feedback.voice_delay_s) || DEFAULT_VOICE_DELAY_S;
-      const elapsed = (now - stateEnteredAt) / 1000;
-      const pct = Math.min(100, Math.max(0, (elapsed / delay) * 100));
-      const rem = Math.max(0, delay - elapsed);
-      btn.className = "fill-hold-btn warn";
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = rem > 0 ? "Slouch hold — Spoken prompt in " + rem.toFixed(1) + "s" : "Triggering spoken prompt...";
-      pctEl.textContent = Math.round(pct) + "%";
-      if (wrap && label && bar) {
-        wrap.style.display = "block";
-        label.textContent = "Reminder in " + Math.ceil(rem) + "s";
-        bar.style.width = (100 - pct).toFixed(1) + "%";
-      }
-      return;
-    }
-
-    // Good state: the backend streaks drive progress, so the bar hits 100%
-    // exactly when the backend fires - never "triggering" with no sound.
-    if (currentBand === "bad") {
-      const streak = typeof payload.bad_streak_s === "number" ? payload.bad_streak_s : 0;
-      const pct = Math.min(100, Math.max(0, (streak / badSustainS) * 100));
-      const rem = Math.max(0, badSustainS - streak);
-      btn.className = "fill-hold-btn bad";
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = rem > 0 ? "Slouch detected — Chime in " + rem.toFixed(1) + "s" : "Chime triggering...";
-      pctEl.textContent = Math.round(pct) + "%";
-      return;
-    }
-    if (currentBand === "ok") {
-      btn.className = "fill-hold-btn warn";
-      const pct = smoothScore === null ? 0 : Math.min(100, Math.max(0, smoothScore));
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = "Posture OK — hold steady";
-      pctEl.textContent = Math.round(pct) + "%";
-      return;
-    }
-    // Green: confirm-good progress from the backend streak, then the reward
-    // cooldown counts down to the next positive chime.
-    const goodStreak = typeof payload.good_streak_s === "number" ? payload.good_streak_s : 0;
-    if (goodStreak < goodConfirmS) {
-      const pct = Math.min(100, Math.max(0, (goodStreak / goodConfirmS) * 100));
-      btn.className = "fill-hold-btn good";
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = "Good posture hold — Confirming...";
-      pctEl.textContent = Math.round(pct) + "%";
-      return;
-    }
-    const every = Number(timings.positive_every_s) || 0;
-    if (timings.positive_enabled !== false && every > 0) {
-      const sinceReward = lastRewardAt === null
-        ? Math.max(0, goodStreak - goodConfirmS)
-        : Math.max(0, (now - lastRewardAt) / 1000);
-      const pct = Math.min(100, Math.max(0, (sinceReward / every) * 100));
-      const rem = Math.max(0, every - sinceReward);
-      btn.className = "fill-hold-btn good";
-      fill.style.width = pct.toFixed(1) + "%";
-      textEl.textContent = rem > 0 ? "Good — reward chime in " + Math.ceil(rem) + "s" : "Playing reward chime...";
-      pctEl.textContent = Math.round(pct) + "%";
-      return;
-    }
-    btn.className = "fill-hold-btn good";
-    fill.style.width = "100%";
-    textEl.textContent = "✓ Good Posture Held";
-    pctEl.textContent = "100%";
+    wrap.style.display = "flex";
+    const remaining = Math.max(0, delay - (Date.now() - graceStartedAt) / 1000);
+    // dashoffset 0 = full ring, C = empty: the ring drains as grace time burns.
+    arc.setAttribute(
+      "stroke-dashoffset",
+      (GRACE_CIRCUMFERENCE * (1 - remaining / delay)).toFixed(1)
+    );
+    seconds.textContent = Math.ceil(remaining) + "s";
   }
 
   const previousApply = window.apply;
@@ -908,7 +766,98 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
     window.apply = function (payload) {
       previousApply(payload);
       updateNeedle(payload);
-      updateFillHold(payload);
+      updateCountdown(payload);
+      updateGraceRing(payload);
+    };
+  }
+})();
+</script>
+<script>
+// Group 3: mini-HUD/PiP toggle and layout consolidation. Wraps apply() like
+// the needle block; all state (last, thresholds, wireStyle) is global.
+(function () {
+  const videoWrap = document.querySelector(".video-wrap");
+  const hudDot = document.getElementById("hud-dot");
+  const pipToggle = document.getElementById("pip-toggle");
+  const guide = document.getElementById("placement-guide");
+  const tiles = document.querySelector(".tiles");
+  const metricsNote = document.getElementById("metrics-note");
+
+  // Mini HUD: the border is the status ring (recolored to the wireframe state
+  // every frame); the dot is a 2-axis inclinometer — x: trunk lean, y: head
+  // forward, scaled by 1.5x each threshold like the bullet bars. No dot when
+  // a value is missing (trunk lean optional) or tracking is down.
+  function updateHud() {
+    const wire = window.wireStyle && window.wireStyle();
+    if (wire) videoWrap.style.borderColor = wire.color;
+    const pip = videoWrap.classList.contains("pip");
+    if (pip && last && last.metrics && thresholds) { // top-level const/let are in the global lexical scope
+      const trunk = last.metrics.trunk_lean_deg;
+      const head = last.metrics.head_forward_deg;
+      // (last/thresholds are the main script's globals, not window props.)
+      if (trunk !== null && head !== null) {
+        const clamp = (v) => Math.max(-1, Math.min(1, v));
+        const nx = clamp(trunk / ((thresholds.trunk_lean_deg || 7) * 1.5)) * 0.4;
+        const ny = clamp(head / ((thresholds.head_forward_deg || 8) * 1.5)) * 0.4;
+        hudDot.style.left = (50 + nx * 100) + "%";
+        hudDot.style.top = (50 + ny * 100) + "%";
+        hudDot.style.display = "block";
+        return;
+      }
+    }
+    hudDot.style.display = pip ? "none" : ""; // no dot without both values
+  }
+
+  function setPip(on) {
+    videoWrap.classList.toggle("pip", on);
+    pipToggle.textContent = on ? "\u25A4 Full view" : "\u263C Mini HUD";
+    updateHud();
+  }
+  pipToggle.addEventListener("click", () =>
+    setPip(!videoWrap.classList.contains("pip"))
+  );
+  videoWrap.addEventListener("click", () => {
+    if (videoWrap.classList.contains("pip")) setPip(false);
+  });
+
+  // Placement guide: open on first launch (kept open until tracking is
+  // confirmed, so a first-run user reads it), auto-closed by the first
+  // reliable snapshot — but a manual toggle always wins over the automation.
+  guide.open = true;
+  let userTouchedGuide = false;
+  guide.querySelector("summary").addEventListener("click", () => {
+    userTouchedGuide = true;
+  });
+  let unreliableSince = null;
+  let trackingConfirmed = false;
+
+  const previousApply = window.apply;
+  if (previousApply) {
+    window.apply = function (payload) {
+      previousApply(payload);
+      // Dim the cards and name the reason when tracking is unreliable: stale
+      // numbers must never read as live truth.
+      const unreliable = payload.state === "unreliable";
+      tiles.classList.toggle("dimmed", unreliable);
+      metricsNote.classList.toggle("unreliable", unreliable);
+      metricsNote.textContent = unreliable
+        ? "Tracking unreliable \u2014 values may be stale" +
+          (payload.unreliable_detail ? " \u00B7 " + payload.unreliable_detail : "")
+        : "";
+      // UNRELIABLE sustained > 5s re-opens the placement guide; the first
+      // reliable snapshot closes the first-launch expansion.
+      if (unreliable) {
+        if (unreliableSince === null) unreliableSince = Date.now();
+        else if (Date.now() - unreliableSince > 5000 && !guide.open) guide.open = true;
+      } else {
+        unreliableSince = null;
+        if (!trackingConfirmed && !userTouchedGuide && guide.open &&
+            (payload.state === "good" || payload.state.startsWith("bad_"))) {
+          trackingConfirmed = true;
+          guide.open = false;
+        }
+      }
+      updateHud();
     };
   }
 })();
