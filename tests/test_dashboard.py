@@ -23,6 +23,7 @@ class RecordingAudio:
         self.calls = 0
         self.chime_calls = 0
         self.voice_calls = 0
+        self.positive_calls = 0
         self.rendered: list[str] = []
 
     def test_nudge(self) -> None:
@@ -33,6 +34,9 @@ class RecordingAudio:
 
     def play_voice(self) -> None:
         self.voice_calls += 1
+
+    def play_positive(self) -> None:
+        self.positive_calls += 1
 
     def render_prompt(self, text: str) -> str | None:
         self.rendered.append(text)
@@ -378,3 +382,40 @@ def test_docs_page_is_served_and_linked_from_index() -> None:
         assert heading in page
     assert index.status_code == 200
     assert 'href="/docs"' in index.text
+
+
+def test_nudge_positive_endpoint_triggers_audio_and_banner() -> None:
+    hub = DashboardHub()
+    audio = RecordingAudio()
+    feedback = RuntimeFeedback()
+    client = TestClient(create_app(hub, audio, feedback=feedback))
+
+    response = client.post("/nudge/positive")
+    assert response.status_code == 200
+    assert response.json() == {"status": "queued"}
+    assert audio.positive_calls == 1
+    event, _ = hub.latest_direct_event()
+    assert event["kind"] == "positive_chime"
+
+
+def test_feedback_settings_supports_posture_knobs() -> None:
+    hub = DashboardHub()
+    audio = RecordingAudio()
+    feedback = RuntimeFeedback()
+    client = TestClient(create_app(hub, audio, feedback=feedback))
+
+    body = {
+        "head_forward_deg": 8.0,
+        "trunk_lean_deg": 7.0,
+        "bad_sustain_s": 0.8,
+        "good_confirm_s": 1.2,
+        "positive_every_s": 20.0,
+        "positive_voice_text": "Superb posture!",
+    }
+    response = client.post("/feedback/settings", json=body)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["head_forward_deg"] == 8.0
+    assert payload["trunk_lean_deg"] == 7.0
+    assert payload["bad_sustain_s"] == 0.8
+    assert payload["positive_voice_text"] == "Superb posture!"

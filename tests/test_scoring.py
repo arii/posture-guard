@@ -320,3 +320,31 @@ class TestZoneOf:
             depth_m=1.4,
         )
         assert zone_of(metrics, CFG) == "bad"
+
+    def test_trunk_counts_when_hips_visible_despite_optional_mode(self, leaning_pose):
+        # Trunk lean ~9.5 deg over a 9.0 threshold with visible hips: bad,
+        # even though trunk_lean_required is false.
+        cfg = ScoringConfig(trunk_lean_deg=9.0, trunk_lean_required=False)
+        scored = score_pose(leaning_pose, 1.4, cfg)
+        assert isinstance(scored, ScoredPosture)
+        assert scored.trunk_available is True
+        assert zone_of(scored, cfg) == "bad"
+
+    def test_hidden_hips_drop_trunk_from_zone_in_optional_mode(self):
+        # Same lean but hips below the floor: trunk drops out, the level
+        # head/shoulders read good.
+        cfg = ScoringConfig(trunk_lean_deg=9.0, trunk_lean_required=False)
+        pose = make_pose(
+            {
+                LEFT_SHOULDER: SimpleLandmark(x=0.45, y=0.60),
+                RIGHT_SHOULDER: SimpleLandmark(x=0.65, y=0.60),
+                LEFT_EAR: SimpleLandmark(x=0.51, y=0.45),
+                RIGHT_EAR: SimpleLandmark(x=0.59, y=0.45),
+                LEFT_HIP: SimpleLandmark(x=0.44, y=0.90, visibility=0.1),
+                RIGHT_HIP: SimpleLandmark(x=0.56, y=0.90, visibility=0.1),
+            }
+        )
+        scored = score_pose(pose, 1.4, cfg)
+        assert isinstance(scored, ScoredPosture)
+        assert scored.trunk_available is False
+        assert zone_of(scored, cfg) == "good"

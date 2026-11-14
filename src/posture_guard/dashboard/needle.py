@@ -22,9 +22,7 @@ Metrics = dict[str, float | None]
 GOOD_END = 100.0 / 3.0
 BAD_START = 200.0 / 3.0
 
-TRUNK_KEY = "trunk_lean_deg"
 MARGIN_KEY = "hysteresis_margin_deg"
-TRUNK_REQUIRED_KEY = "trunk_lean_required"
 
 
 def metric_severity(value: float | None, threshold: float | None) -> float | None:
@@ -45,21 +43,19 @@ def composite_score(
 
     The worst metric's exit fraction (its threshold minus the hysteresis
     margin) maps to GOOD_END and severity 1 maps to BAD_START; past the
-    threshold the red zone fills up to 2x severity. Trunk lean is skipped when
-    it is unavailable (None) or when trunk_lean_required is false, exactly like
-    the scoring zone. Returns None when nothing is usable (no person, or no
+    threshold the red zone fills up to 2x severity. Trunk lean counts whenever
+    it has a value: the pipeline sends None exactly while the hips are hidden,
+    mirroring the scoring zone's trunk_available rule, so a present value is
+    always trustworthy. Returns None when nothing is usable (no person, or no
     thresholds received yet).
     """
     if not thresholds:
         return None
     margin = thresholds.get(MARGIN_KEY, 0.0)
     margin_deg = float(margin) if isinstance(margin, (int, float)) else 0.0
-    trunk_required = thresholds.get(TRUNK_REQUIRED_KEY, True)
     worst: tuple[float, float] | None = None  # (severity, exit_fraction)
     for key, value in metrics.items():
         if value is None:
-            continue
-        if key == TRUNK_KEY and trunk_required is False:
             continue
         threshold = thresholds.get(key)
         if not isinstance(threshold, (int, float)) or threshold <= 0:

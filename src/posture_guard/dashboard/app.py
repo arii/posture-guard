@@ -130,6 +130,20 @@ def create_app(
         )
         return {"status": "queued"}
 
+    @app.post("/nudge/positive")
+    def nudge_positive() -> dict[str, str]:
+        if hasattr(audio, "play_positive"):
+            audio.play_positive()
+        elif hasattr(audio, "play_chime"):
+            audio.play_chime()
+        pos_text = (
+            feedback.positive_text()
+            if feedback is not None and hasattr(feedback, "positive_text")
+            else "Good posture, keep it up!"
+        )
+        hub.publish_nudge_event("positive_chime", text=pos_text)
+        return {"status": "queued"}
+
     @app.post("/feedback/settings")
     def feedback_settings(body: dict[str, object]) -> dict[str, object]:
         """Apply runtime feedback settings (mode, voice timings, prompt text).
@@ -144,9 +158,12 @@ def create_app(
         if error is not None:
             raise HTTPException(status_code=422, detail=error)
         text_changed = "chime_text" in changes
+        pos_text_changed = "positive_voice_text" in changes
         payload = feedback.apply(**changes)
         if text_changed:
             audio.render_prompt(str(changes["chime_text"]))
+        if pos_text_changed and hasattr(audio, "render_positive_prompt"):
+            audio.render_positive_prompt(str(changes["positive_voice_text"]))
         return payload
 
     @app.get("/")

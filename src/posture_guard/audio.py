@@ -187,6 +187,20 @@ class AudioWorker:
         and mode (spec: test endpoints are hardware-verification commands)."""
         self.enqueue(Nudge.VOICE, force=True)
 
+    def play_positive(self) -> None:
+        """Dashboard hook: force-play positive chime and positive voice praise."""
+        self.enqueue(Nudge.POSITIVE_CHIME, force=True)
+        if Nudge.POSITIVE_VOICE in self._sounds:
+            self.enqueue(Nudge.POSITIVE_VOICE, force=True)
+
+    def play_positive_chime(self) -> None:
+        """Dashboard hook: force-play the positive chime only."""
+        self.enqueue(Nudge.POSITIVE_CHIME, force=True)
+
+    def play_positive_voice(self) -> None:
+        """Dashboard hook: force-play the positive spoken praise only."""
+        self.enqueue(Nudge.POSITIVE_VOICE, force=True)
+
     # -- internals -------------------------------------------------------------------
 
     def render_prompt(self, text: str) -> str | None:
@@ -212,6 +226,23 @@ class AudioWorker:
         self._discard_stale(previous)
         return backend
 
+    def render_positive_prompt(self, text: str) -> str | None:
+        """Re-render the positive spoken praise for edited text."""
+        with self._sounds_lock:
+            self._voice_seq += 1
+            path = self._sound_dir / f"positive-voice-{self._voice_seq}.wav"
+        backend = self._render_voice(text, path)
+        if backend is None:
+            path.unlink(missing_ok=True)
+            return None
+        self._tts_backend = backend
+        self._error = None
+        with self._sounds_lock:
+            previous = self._sounds.get(Nudge.POSITIVE_VOICE)
+            self._sounds[Nudge.POSITIVE_VOICE] = path
+        self._discard_stale(previous)
+        return backend
+
     def _discard_stale(self, path: Path | None) -> None:
         """Delete a replaced voice WAV once no playback can still be reading it.
         A file being played right now is unlinked by the playback loop instead."""
@@ -232,6 +263,11 @@ class AudioWorker:
         if backend is not None:
             self._sounds[Nudge.VOICE] = voice_path
             self._tts_backend = backend
+        if self._config.positive_voice_text:
+            positive_voice_path = self._sound_dir / "positive-voice.wav"
+            pos_backend = self._render_voice(self._config.positive_voice_text, positive_voice_path)
+            if pos_backend is not None:
+                self._sounds[Nudge.POSITIVE_VOICE] = positive_voice_path
 
     def _render_voice(self, text: str, path: Path) -> str | None:
         """Render the spoken prompt to path; pico2wave first, espeak-ng fallback.
@@ -255,8 +291,9 @@ class AudioWorker:
             return None
         for line in result.stdout.splitlines():
             fields = line.split("\t")
-            if fields and "usb" in fields[0].lower():
-                return fields[0]
+            for field in fields:
+                if "usb" in field.lower():
+                    return field
         return None
 
     def _playback_loop(self) -> None:
@@ -284,7 +321,7 @@ class AudioWorker:
         for sink in sinks:
             cmd = [self._paplay]
             if sink is not None:
-                cmd += ["--sink", sink]
+                cmd += ["--device", sink]
             cmd.append(str(path))
             try:
                 result = self._runner(cmd)

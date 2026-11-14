@@ -37,8 +37,9 @@ class ScoringConfig:
     depth_min_m: float = 0.6
     depth_max_m: float = 2.5
     # High-mount framing can keep hips permanently below the visibility floor;
-    # set false to score ears/shoulders only (trunk lean drops out of the BAD
-    # decision and reports unavailable) so head-forward reminders still fire.
+    # set false to score ears/shoulders while the hips are hidden (trunk lean
+    # then reports unavailable and drops out of the zone). Whenever the hips
+    # ARE visible the trunk angle counts toward the zone either way.
     trunk_lean_required: bool = True
 
     def bad_exit(self, enter_threshold: float) -> float:
@@ -63,6 +64,7 @@ class AudioConfig:
     # Spoken-prompt wording rendered by TTS (the chime is a synthesized tone;
     # "chime_text" elsewhere in the UI/API means this spoken wording).
     voice_text: str = "Please fix your posture"
+    positive_voice_text: str | None = None
 
 
 @dataclass(frozen=True)

@@ -38,7 +38,7 @@ def test_worst_metric_sets_the_score():
     assert composite_score(metrics, THRESHOLDS) == pytest.approx(200.0 / 9.0)
 
 
-def test_enter_threshold_maps_to_red_boundary_and saturates():
+def test_enter_threshold_maps_to_red_boundary_and_saturates():
     metrics = {
         "head_forward_deg": 12.0,
         "head_tilt_deg": 12.0,
@@ -61,16 +61,18 @@ def test_unavailable_metrics_are_skipped():
     assert composite_score(metrics, THRESHOLDS) == pytest.approx(200.0 / 3.0)
 
 
-def test_trunk_lean_optional_mode_ignores_trunk():
+def test_trunk_counts_when_present_ignored_when_hidden():
     metrics = {
         "head_forward_deg": 0.0,
         "head_tilt_deg": 0.0,
         "shoulder_level_deg": 0.0,
-        "trunk_lean_deg": 20.0,  # 2x over, but trunk is not scored
+        "trunk_lean_deg": 20.0,  # 2x over -> red in every mode
     }
     optional = dict(THRESHOLDS, trunk_lean_required=False)
-    assert composite_score(metrics, optional) == 0.0
+    assert composite_score(metrics, optional) == pytest.approx(100.0)
     assert composite_score(metrics, THRESHOLDS) == pytest.approx(100.0)
+    hidden = dict(metrics, trunk_lean_deg=None)
+    assert composite_score(hidden, optional) == 0.0
 
 
 def test_missing_threshold_skips_metric_and_none_when_nothing_usable():

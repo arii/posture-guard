@@ -127,9 +127,9 @@ def test_paplay_failure_falls_back_to_default_sink_and_records_both(tmp_path):
         plays = runner.play_calls()
         assert len(plays) == 2
         assert plays[0][:3] == [
-            "paplay", "--sink", "alsa_output.usb-C-Media_Electronics_Box-00.analog-stereo",
+            "paplay", "--device", "alsa_output.usb-C-Media_Electronics_Box-00.analog-stereo",
         ]
-        assert "--sink" not in plays[1]  # second attempt: paplay default sink
+        assert "--device" not in plays[1]  # second attempt: paplay default sink
         error = worker.status.error
         assert "exited 1" in error
         assert "default" in error  # both attempts named
@@ -231,7 +231,7 @@ def test_playback_targets_configured_sink(tmp_path):
         worker.enqueue(Nudge.CHIME)
         assert wait_until(lambda: len(runner.play_calls()) == 1)
         cmd = runner.play_calls()[0]
-        assert cmd[1:3] == ["--sink", "alsa_usb_2"]
+        assert cmd[1:3] == ["--device", "alsa_usb_2"]
     finally:
         worker.close()
 
@@ -318,5 +318,36 @@ def test_startup_pre_renders_positive_chime(tmp_path):
         assert wait_until(lambda: len(runner.play_calls()) == 1)
         assert runner.play_calls()[0][1].endswith("positive-chime.wav")
         assert status.ready
+    finally:
+        worker.close()
+
+
+def test_positive_voice_rendered_and_played(tmp_path):
+    runner = FakeRunner()
+    cfg = AudioConfig(positive_voice_text="Good job holding posture!")
+    worker = make_worker(tmp_path, runner, config=cfg)
+    worker.start()
+    try:
+        assert len(runner.render_calls("pico2wave")) == 2  # voice.wav and positive-voice.wav
+        worker.play_positive()
+        assert wait_until(lambda: len(runner.play_calls()) == 2)
+        plays = runner.play_calls()
+        assert plays[0][1].endswith("positive-chime.wav")
+        assert plays[1][1].endswith("positive-voice.wav")
+    finally:
+        worker.close()
+
+
+def test_render_positive_prompt_replaces_wav(tmp_path):
+    runner = FakeRunner()
+    cfg = AudioConfig(positive_voice_text="Good posture!")
+    worker = make_worker(tmp_path, runner, config=cfg)
+    worker.start()
+    try:
+        backend = worker.render_positive_prompt("Awesome posture, keep going!")
+        assert backend == "pico2wave"
+        worker.play_positive_voice()
+        assert wait_until(lambda: len(runner.play_calls()) == 1)
+        assert "positive-voice-1.wav" in runner.play_calls()[0][1]
     finally:
         worker.close()

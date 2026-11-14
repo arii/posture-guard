@@ -25,6 +25,12 @@ from posture_guard.scoring import (
 )
 
 _EPS = 1e-9  # float slack for window comparisons on the 0.1 s sample grid
+# Smoothing never starves: the window holds at least this many recent samples
+# even when the frame rate divides the horizon awkwardly (at 24 fps a pure
+# 0.3 s span never fills, which used to veto every bad streak). Anything
+# older than the stall cap is stale and stays dropped.
+_MIN_WINDOW_SAMPLES = 3
+_STALL_CAP_S = 2.0
 
 
 class PostureState(Enum):
@@ -40,6 +46,7 @@ class Nudge(Enum):
     CHIME = "chime"
     VOICE = "voice"
     POSITIVE_CHIME = "positive_chime"
+    POSITIVE_VOICE = "positive_voice"
 
 
 _ABSENT_REASONS = (UnreliableReason.NO_POSE, UnreliableReason.DEPTH_OUT_OF_BAND)
@@ -106,33 +113,48 @@ class PostureStateMachine:
             return self._on_unreliable(result, now)
 
         self._absent_since = None  # person seen and scored
-        zone = zone_of(result, self._th)
+        th = self._active_thresholds()
+        zone = zone_of(result, th)
         self._history.append((now, zone))
         self._prune_history(now)
 
-        span = now - self._history[0][0]
-        smoothed_bad = span >= self._t.smoothing_window_s - _EPS and all(
-            z == "bad" for _, z in self._history
-        )
-        smoothed_good = span >= self._t.smoothing_window_s - _EPS and all(
-            z == "good" for _, z in self._history
-        )
-        if smoothed_bad and self._bad_since is None:
-            self._bad_since = self._history[0][0]
+        zones = [zone for _, zone in self._history]
+        # Fullness is sample-counted (pruning guarantees the minimum): a pure
+        # time span starves whenever fps divides the horizon awkwardly, which
+        # vetoed every bad streak at 24 fps.
+        window_full = len(self._history) >= _MIN_WINDOW_SAMPLES
+        # Majority vote, neutral abstains: a slouch hovering at a threshold
+        # flickers bad/neutral (and occasionally good) frame to frame, and any
+        # veto-based rule blocks the streak forever (red needle, 0% bar, no
+        # sound). More bad than good sustains the bad streak; more good than
+        # bad sustains good. Ties and pure-neutral windows hold the streaks.
+        n_bad = zones.count("bad")
+        n_good = zones.count("good")
+        bad_dominant = window_full and n_bad > n_good
+        good_dominant = window_full and n_good > n_bad
+        if bad_dominant and self._bad_since is None:
+            bad_times = [t for t, z in self._history if z == "bad"]
+            self._bad_since = bad_times[0] if bad_times else self._history[0][0]
         if (
-            (smoothed_good or (self._state is PostureState.NO_PERSON and not smoothed_bad))
+            (good_dominant or (self._state is PostureState.NO_PERSON and not bad_dominant))
             and self._good_since is None
         ):
-            self._good_since = self._history[0][0]
-        if not smoothed_bad and self._bad_since is not None and smoothed_good:
+            good_times = [t for t, z in self._history if z == "good"]
+            self._good_since = good_times[0] if good_times else self._history[0][0]
+        if good_dominant and self._bad_since is not None:
             self._bad_since = None
-        if not smoothed_good and self._good_since is not None and smoothed_bad:
+        if bad_dominant and self._good_since is not None:
             self._good_since = None
 
         if self._state in (PostureState.BAD_CHIME, PostureState.BAD_VOICE):
-            return self._update_bad(smoothed_good, now)
-        transition = self._update_idle(smoothed_bad, smoothed_good, now)
-        if self._state is PostureState.GOOD and self._positive.positive_chime.enabled:
+            return self._update_bad(good_dominant, now)
+        transition = self._update_idle(bad_dominant, good_dominant, now)
+        pos_enabled = (
+            getattr(self._override, "positive_enabled", self._positive.positive_chime.enabled)
+            if self._override is not None
+            else self._positive.positive_chime.enabled
+        )
+        if self._state is PostureState.GOOD and pos_enabled:
             return self._maybe_positive_chime(now)
         return transition
 
@@ -175,13 +197,33 @@ class PostureStateMachine:
             return self._override.voice_timings()
         return self._t.voice_delay_s, self._t.voice_repeat_cooldown_s
 
-    def _update_idle(self, smoothed_bad: bool, smoothed_good: bool, now: float) -> Transition:
+    def _state_timings(self) -> tuple[float, float, float]:
+        """(bad_sustain_s, good_confirm_s, positive_every_s) with runtime overrides."""
+        bad_s = self._t.bad_sustain_s
+        good_s = self._t.good_confirm_s
+        pos_s = self._positive.positive_chime.every_seconds
+        if self._override is not None:
+            if getattr(self._override, "bad_sustain_s", None) is not None:
+                bad_s = float(self._override.bad_sustain_s)
+            if getattr(self._override, "good_confirm_s", None) is not None:
+                good_s = float(self._override.good_confirm_s)
+            if getattr(self._override, "positive_every_s", None) is not None:
+                pos_s = float(self._override.positive_every_s)
+        return bad_s, good_s, pos_s
+
+    def _active_thresholds(self) -> ScoringConfig:
+        if self._override is not None and hasattr(self._override, "scoring_config"):
+            return self._override.scoring_config(self._th)
+        return self._th
+
+    def _update_idle(self, bad_dominant: bool, good_dominant: bool, now: float) -> Transition:
+        bad_s, good_s, _ = self._state_timings()
         # Bad is checked first so a slouching person who never sat well still
         # gets nudged instead of waiting forever in NO_PERSON.
         if (
-            smoothed_bad
+            bad_dominant
             and self._bad_since is not None
-            and now - self._bad_since >= self._t.bad_sustain_s - _EPS
+            and now - self._bad_since >= bad_s - _EPS
         ):
             seconds_bad = now - self._bad_since
             self._state = PostureState.BAD_CHIME
@@ -189,21 +231,21 @@ class PostureStateMachine:
             self._voice_at = None
             self._good_state_since = None
             return Transition(PostureState.BAD_CHIME, Nudge.CHIME, seconds_bad)
-        can_confirm_good = smoothed_good or (
-            self._state is PostureState.NO_PERSON and not smoothed_bad
+        can_confirm_good = good_dominant or (
+            self._state is PostureState.NO_PERSON and not bad_dominant
         )
         if (
             can_confirm_good
             and self._good_since is not None
-            and now - self._good_since >= self._t.good_confirm_s - _EPS
+            and now - self._good_since >= good_s - _EPS
         ):
             self._state = PostureState.GOOD
             return Transition(PostureState.GOOD, Nudge.NONE)
         return Transition(self._state, Nudge.NONE)
 
-    def _update_bad(self, smoothed_good: bool, now: float) -> Transition:
+    def _update_bad(self, good_dominant: bool, now: float) -> Transition:
         if (
-            smoothed_good
+            good_dominant
             and self._good_since is not None
             and now - self._good_since >= self._t.recovery_good_s - _EPS
         ):
@@ -233,7 +275,7 @@ class PostureStateMachine:
         on fire (cooldown) and on any departure from GOOD (sustained interval)."""
         if self._good_state_since is None:
             self._good_state_since = now
-        every_s = self._positive.positive_chime.every_seconds
+        _, _, every_s = self._state_timings()
         sustained = now - self._good_state_since >= every_s - _EPS
         cooled = self._positive_at is None or now - self._positive_at >= every_s - _EPS
         if sustained and cooled:
@@ -243,4 +285,14 @@ class PostureStateMachine:
 
     def _prune_history(self, now: float) -> None:
         cutoff = now - self._t.smoothing_window_s - _EPS
-        self._history = [(t, z) for t, z in self._history if t >= cutoff]
+        recent = [(t, z) for t, z in self._history if t >= cutoff]
+        if len(recent) < _MIN_WINDOW_SAMPLES:
+            # Low frame rate (or unlucky window/fps ratio): reach back for
+            # evidence instead of starving the vote; anything older than the
+            # stall cap is stale and stays dropped.
+            older = [
+                (t, z) for t, z in self._history
+                if cutoff > t >= now - _STALL_CAP_S
+            ]
+            recent = (older + recent)[-_MIN_WINDOW_SAMPLES:]
+        self._history = recent

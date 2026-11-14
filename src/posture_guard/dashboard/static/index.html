@@ -225,7 +225,7 @@
          (feat/posture-needle). Math mirrors src/posture_guard/dashboard/needle.py. -->
     <div class="panel" id="needle-panel" style="margin-top: 16px">
       <h2>Posture needle</h2>
-      <svg id="needle-gauge" viewBox="0 0 200 142" style="width:100%;height:auto;display:block" role="img" aria-label="Composite posture score: needle sweeps green (good) to red (over every threshold band)">
+      <svg id="needle-gauge" viewBox="0 0 200 142" style="width:100%;height:auto;display:block" role="img" aria-label="Composite posture score: needle sweeps green (good) to red (bad, past a threshold)">
         <path d="M14 100 A 86 86 0 0 1 57 25.5" fill="none" stroke="#4cc36a" stroke-width="14" stroke-linecap="butt"/>
         <path d="M57 25.5 A 86 86 0 0 1 143 25.5" fill="none" stroke="#ffb340" stroke-width="14" stroke-linecap="butt"/>
         <path d="M143 25.5 A 86 86 0 0 1 186 100" fill="none" stroke="#ff5c5c" stroke-width="14" stroke-linecap="butt"/>
@@ -235,7 +235,7 @@
         <circle cx="100" cy="100" r="7" fill="#e8ebf0"/>
         <text id="needle-score" x="100" y="134" text-anchor="middle" font-size="17" font-weight="600" fill="#e8ebf0">--</text>
         <text x="16" y="119" font-size="10" fill="#4cc36a">good</text>
-        <text x="184" y="119" font-size="10" fill="#ff5c5c" text-anchor="end">over</text>
+        <text x="184" y="119" font-size="10" fill="#ff5c5c" text-anchor="end">bad</text>
       </svg>
       <!-- Fill-on-Hold Button: solid color sweeps across rectangular button like a loading bar until 100% and triggers -->
       <div id="fill-hold-btn" class="fill-hold-btn idle" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
@@ -347,18 +347,67 @@
       </div>
       <div class="btn-row">
         <button id="play-chime" class="secondary">&#9835; Play chime</button>
-        <button id="play-voice" class="secondary">&#128483; Speak prompt</button>
+        <button id="play-voice" class="secondary">&#128483; Speak slouch</button>
+        <button id="play-positive" class="secondary" style="border-color:#4cc36a; color:#4cc36a">&#10003; Test praise</button>
       </div>
       <div class="feedback-form">
-        <label for="set-chime_text">Spoken prompt text</label>
+        <h3 style="font-size:13px; color:var(--text); margin:8px 0 4px">Voice prompts</h3>
+        <label for="set-chime_text">Slouch reminder text</label>
         <input type="text" id="set-chime_text" maxlength="120">
-        <label for="set-voice_delay_s">Voice delay (s)</label>
-        <input type="number" id="set-voice_delay_s" min="1" step="0.5">
-        <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
-        <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
-        <div class="btn-row"><button id="apply-settings">Apply settings</button></div>
+        <label for="set-positive_voice_text">Good posture praise text</label>
+        <input type="text" id="set-positive_voice_text" maxlength="120">
+
+        <h3 style="font-size:13px; color:var(--text); margin:12px 0 4px">Timings &amp; delays</h3>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div>
+            <label for="set-bad_sustain_s">Slouch to chime (s)</label>
+            <input type="number" id="set-bad_sustain_s" min="0.2" step="0.2">
+          </div>
+          <div>
+            <label for="set-voice_delay_s">Voice delay (s)</label>
+            <input type="number" id="set-voice_delay_s" min="1" step="0.5">
+          </div>
+          <div>
+            <label for="set-good_confirm_s">Good confirm (s)</label>
+            <input type="number" id="set-good_confirm_s" min="0.2" step="0.2">
+          </div>
+          <div>
+            <label for="set-positive_every_s">Reward interval (s)</label>
+            <input type="number" id="set-positive_every_s" min="1" step="1">
+          </div>
+          <div>
+            <label for="set-voice_repeat_cooldown_s">Repeat cooldown (s)</label>
+            <input type="number" id="set-voice_repeat_cooldown_s" min="1" step="1">
+          </div>
+        </div>
+
+        <h3 style="font-size:13px; color:var(--text); margin:12px 0 4px">Posture sensitivity thresholds</h3>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+          <div>
+            <label for="set-head_forward_deg">Head forward (&deg;)</label>
+            <input type="number" id="set-head_forward_deg" min="1" step="1">
+          </div>
+          <div>
+            <label for="set-trunk_lean_deg">Trunk lean (&deg;)</label>
+            <input type="number" id="set-trunk_lean_deg" min="1" step="1">
+          </div>
+          <div>
+            <label for="set-head_tilt_deg">Head tilt (&deg;)</label>
+            <input type="number" id="set-head_tilt_deg" min="1" step="1">
+          </div>
+          <div>
+            <label for="set-shoulder_level_deg">Shoulder level (&deg;)</label>
+            <input type="number" id="set-shoulder_level_deg" min="1" step="1">
+          </div>
+          <div style="grid-column: span 2">
+            <label for="set-hysteresis_margin_deg">Hysteresis margin (&deg;)</label>
+            <input type="number" id="set-hysteresis_margin_deg" min="0.5" step="0.5">
+          </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:12px"><button id="apply-settings">Apply settings</button></div>
         <div id="feedback-error"></div>
-        <div class="session-note">Settings apply immediately but are session-only &mdash; they reset on restart (config.yaml keeps its defaults).</div>
+        <div class="session-note">Settings apply immediately but are session-only &mdash; tweak live without restarting.</div>
       </div>
     </div>
   </div>
@@ -419,12 +468,15 @@ function applyFeedback(fb) {
   );
   if (modeInput && document.activeElement !== modeInput) modeInput.checked = true;
   if (!feedbackInitialized) {
-    const textEl = document.getElementById("set-chime_text");
-    const delayEl = document.getElementById("set-voice_delay_s");
-    const repeatEl = document.getElementById("set-voice_repeat_cooldown_s");
-    if (textEl && textEl.value === "") textEl.value = fb.chime_text || "";
-    if (delayEl && delayEl.value === "") delayEl.value = fb.voice_delay_s;
-    if (repeatEl && repeatEl.value === "") repeatEl.value = fb.voice_repeat_cooldown_s;
+    const fields = [
+      "chime_text", "positive_voice_text", "voice_delay_s", "voice_repeat_cooldown_s",
+      "bad_sustain_s", "good_confirm_s", "positive_every_s",
+      "head_forward_deg", "trunk_lean_deg", "head_tilt_deg", "shoulder_level_deg", "hysteresis_margin_deg"
+    ];
+    fields.forEach((k) => {
+      const el = document.getElementById("set-" + k);
+      if (el && el.value === "" && fb[k] !== undefined) el.value = fb[k];
+    });
     feedbackInitialized = true;
   }
 }
@@ -433,7 +485,7 @@ function applyNudgeEvent(event) {
   if (!event || event.seq === lastNudgeSeq) return;
   lastNudgeSeq = event.seq;
   const muted = event.muted ? " (muted)" : "";
-  const reward = event.kind === "positive_chime";
+  const reward = event.kind === "positive_chime" || event.kind === "positive_voice";
   if (reward && window.noteRewardChime) window.noteRewardChime();
   nudgeEventEl.textContent = reminderLabel(event) + muted;
   // The reward is good news: green banner, never the amber reminder style.
@@ -467,7 +519,9 @@ function reminderLabel(event) {
   // Plain language: every reminder names itself. Voice shows the spoken text.
   if (event.kind === "voice") return "Reminder: " + (event.text || "spoken prompt");
   if (event.kind === "chime") return "Reminder: chime";
-  if (event.kind === "positive_chime") return "Nice posture ✓";
+  if (event.kind === "positive_chime" || event.kind === "positive_voice") {
+    return "Nice posture ✓" + (event.text ? " — " + event.text : "");
+  }
   return "Reminder: " + (event.text || event.kind);
 }
 
@@ -567,6 +621,16 @@ document.getElementById("play-voice").addEventListener("click", async (event) =>
   finally { button.disabled = false; }
 });
 
+const posBtn = document.getElementById("play-positive");
+if (posBtn) {
+  posBtn.addEventListener("click", async (event) => {
+    const button = event.target;
+    button.disabled = true;
+    try { await post("/nudge/positive"); }
+    finally { button.disabled = false; }
+  });
+}
+
 // Mode switches apply at once; text/timings wait for Apply so half-typed
 // prompts never re-render TTS mid-sentence.
 document.querySelectorAll("input[name='feedback-mode']").forEach((input) => {
@@ -584,16 +648,26 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
   const body = {};
   const text = document.getElementById("set-chime_text").value;
   if (text.trim()) body.chime_text = text.trim();
-  for (const key of ["voice_delay_s", "voice_repeat_cooldown_s"]) {
-    const value = parseFloat(document.getElementById("set-" + key).value);
-    if (!Number.isNaN(value)) body[key] = value;
+  const posText = document.getElementById("set-positive_voice_text");
+  if (posText && posText.value.trim()) body.positive_voice_text = posText.value.trim();
+  const numFields = [
+    "voice_delay_s", "voice_repeat_cooldown_s", "bad_sustain_s", "good_confirm_s", "positive_every_s",
+    "head_forward_deg", "trunk_lean_deg", "head_tilt_deg", "shoulder_level_deg", "hysteresis_margin_deg"
+  ];
+  for (const key of numFields) {
+    const el = document.getElementById("set-" + key);
+    if (el) {
+      const val = parseFloat(el.value);
+      if (!Number.isNaN(val)) body[key] = val;
+    }
   }
   try {
     const updated = await post("/feedback/settings", body);
     if (updated) {
-      if (updated.chime_text !== undefined) document.getElementById("set-chime_text").value = updated.chime_text;
-      if (updated.voice_delay_s !== undefined) document.getElementById("set-voice_delay_s").value = updated.voice_delay_s;
-      if (updated.voice_repeat_cooldown_s !== undefined) document.getElementById("set-voice_repeat_cooldown_s").value = updated.voice_repeat_cooldown_s;
+      Object.keys(updated).forEach((k) => {
+        const el = document.getElementById("set-" + k);
+        if (el && updated[k] !== undefined) el.value = updated[k];
+      });
       error.style.color = "#4cc36a";
       error.textContent = "Settings saved!";
       setTimeout(() => { if (error.textContent === "Settings saved!") error.textContent = ""; }, 2500);
@@ -627,12 +701,12 @@ document.getElementById("apply-settings").addEventListener("click", async () => 
   function worstSeverity(metrics, thresholds) {
     if (!metrics || !thresholds) return null;
     const margin = Number(thresholds.hysteresis_margin_deg) || 0;
-    const trunkRequired = thresholds.trunk_lean_required !== false;
     let worst = null;
+    // Trunk lean counts whenever it has a value: the backend sends None
+    // exactly while the hips are hidden, so a present value is trustworthy.
     Object.keys(metrics).forEach((key) => {
       const value = metrics[key];
       if (value === null || value === undefined) return;
-      if (key === "trunk_lean_deg" && !trunkRequired) return;
       const threshold = thresholds[key];
       if (threshold === null || threshold === undefined || threshold <= 0) return;
       const sev = Math.abs(value) / threshold;

@@ -274,6 +274,25 @@ class TestSmoothingAndHysteresis:
         assert all(tr.state is PostureState.BAD_CHIME for tr in tail)
         assert all(tr.nudge is not Nudge.VOICE for tr in tail)
 
+    def test_bad_neutral_flicker_still_chimes(self):
+        """A slouch hovering at a threshold flickers bad/neutral frame to
+        frame; dominance (not unanimity) keeps the streak alive so the chime
+        still fires on the bad_sustain schedule."""
+        sm = PostureStateMachine(TIMINGS, CFG)
+        neutral = score_pose(make_pose({RIGHT_SHOULDER: SimpleLandmark(x=0.60, y=0.62)}), 1.4, CFG)
+        samples = grid(0.0, 9.9, 0.1, GOOD)
+        now, flip = 10.0, 0
+        while now <= 15.0 + 1e-9:
+            samples.append((round(now, 3), _bad_pose_score() if flip % 2 == 0 else neutral))
+            now += 0.1
+            flip += 1
+        transitions = run(sm, samples)
+        chimes = [
+            at for (at, _), tr in zip(samples, transitions, strict=True)
+            if tr.nudge is Nudge.CHIME
+        ]
+        assert chimes == [12.0]
+
 
 class TestUnreliableAndAbsent:
     def test_low_visibility_is_silent_and_resets_bad_streak(self):

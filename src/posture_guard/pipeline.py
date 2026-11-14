@@ -221,7 +221,12 @@ class PosturePipeline:
         """Run the full frame path once. Clock is the frame timestamp, keeping
         state-machine timelines reproducible in tests."""
         detection = self._detector(frame)
-        result = score_pose(detection.landmarks, detection.depth_m, self._config.scoring)
+        scoring_cfg = (
+            self._feedback.scoring_config(self._config.scoring)
+            if self._feedback is not None and hasattr(self._feedback, "scoring_config")
+            else self._config.scoring
+        )
+        result = score_pose(detection.landmarks, detection.depth_m, scoring_cfg)
         previous = self._state_machine.state
         transition = self._state_machine.update(result, frame.timestamp_s)
         if transition.state is not previous:
@@ -240,6 +245,15 @@ class PosturePipeline:
             )
             if allowed and self._audio is not None:
                 self._audio.enqueue(transition.nudge)
+                if transition.nudge is Nudge.POSITIVE_CHIME:
+                    sounds = getattr(self._audio, "_sounds", {})
+                    has_positive_voice = (
+                        hasattr(self._audio, "_sounds") and Nudge.POSITIVE_VOICE in sounds
+                    )
+                    if has_positive_voice and (
+                        self._feedback is None or self._feedback.allows(Nudge.POSITIVE_VOICE)
+                    ):
+                        self._audio.enqueue(Nudge.POSITIVE_VOICE)
                 logger.info("nudge %s (mode %s): queued", transition.nudge.value, mode)
             else:
                 reason = (
@@ -265,11 +279,16 @@ class PosturePipeline:
         """Build the visible reminder event. Voice events carry the prompt text
         so the banner can read 'Reminder: <text>'; sequence numbers come from
         the hub when wired so snapshot and test-endpoint events never collide."""
-        text = (
-            self._feedback.prompt_text()
-            if nudge is Nudge.VOICE and self._feedback is not None
-            else None
-        )
+        text = None
+        if self._feedback is not None:
+            if nudge is Nudge.VOICE:
+                text = self._feedback.prompt_text()
+            elif nudge in (Nudge.POSITIVE_CHIME, Nudge.POSITIVE_VOICE):
+                text = (
+                    self._feedback.positive_text()
+                    if hasattr(self._feedback, "positive_text")
+                    else None
+                )
         if self._hub is not None:
             return self._hub.next_nudge_event(
                 nudge.value, muted=not allowed, text=text
@@ -306,6 +325,37 @@ class PosturePipeline:
         camera = self._source.status
         depth_m = detection.depth_m
         bad_streak_s, good_streak_s = self._state_machine.streaks(frame.timestamp_s)
+        active_thresholds = self._thresholds
+        active_timings = self._timings
+        if self._feedback is not None:
+            fb = self._feedback.to_payload()
+            active_thresholds = ScoringThresholds(
+                head_forward_deg=float(
+                    fb.get("head_forward_deg", self._thresholds.head_forward_deg)
+                ),
+                trunk_lean_deg=float(fb.get("trunk_lean_deg", self._thresholds.trunk_lean_deg)),
+                head_tilt_deg=float(fb.get("head_tilt_deg", self._thresholds.head_tilt_deg)),
+                shoulder_level_deg=float(
+                    fb.get("shoulder_level_deg", self._thresholds.shoulder_level_deg)
+                ),
+                hysteresis_margin_deg=float(
+                    fb.get("hysteresis_margin_deg", self._thresholds.hysteresis_margin_deg)
+                ),
+                visibility_floor=self._thresholds.visibility_floor,
+                trunk_lean_required=self._thresholds.trunk_lean_required,
+            )
+            active_timings = {
+                "bad_sustain_s": float(
+                    fb.get("bad_sustain_s", self._timings.get("bad_sustain_s", 1.0))
+                ),
+                "good_confirm_s": float(
+                    fb.get("good_confirm_s", self._timings.get("good_confirm_s", 1.5))
+                ),
+                "positive_every_s": float(
+                    fb.get("positive_every_s", self._timings.get("positive_every_s", 15.0))
+                ),
+                "positive_enabled": self._timings.get("positive_enabled", True),
+            }
         snapshot = MetricsSnapshot(
             state=state.value,
             fps=self._fps,
@@ -327,7 +377,7 @@ class PosturePipeline:
                 else ()
             ),
             **_audio_fields(self._audio),
-            thresholds=self._thresholds,
+            thresholds=active_thresholds,
             unreliable_detail=(
                 result.detail if isinstance(result, Unreliable) and result.detail else None
             ),
@@ -338,7 +388,7 @@ class PosturePipeline:
                 else None
             ),
             nudge_event=self._nudge_event,
-            timings=self._timings,
+            timings=active_timings,
             bad_streak_s=bad_streak_s,
             good_streak_s=good_streak_s,
         )
