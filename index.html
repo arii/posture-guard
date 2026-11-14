@@ -77,6 +77,39 @@
   .btn.primary { background: var(--good); border-color: var(--good); color: #10241a; }
   .btn.primary:hover { background: var(--accent); border-color: var(--accent); }
 
+  /* Hero layout: text + live needle demo */
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+    gap: 36px;
+    align-items: center;
+  }
+  .hero-shot {
+    margin: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px;
+  }
+  .hero-shot img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 6px;
+  }
+  .hero-shot figcaption {
+    font-size: 13px;
+    color: var(--muted);
+    padding: 9px 6px 2px;
+  }
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 24px; }
+  }
+  /* Reduced motion: swap the animated GIF for its static first frame */
+  @media (prefers-reduced-motion: reduce) {
+    .hero-shot img { content: url("assets/posture-needle-demo-frame.png"); }
+  }
+
   /* Section headings */
   section { margin-top: 56px; }
   h2 {
@@ -220,16 +253,26 @@
 <body>
 
 <header class="hero">
-  <p class="kicker">Intel RealSense · Linux desktop · runs fully local</p>
-  <h1>Posture Guard</h1>
-  <p class="lede">
-    A Linux desktop posture-correction app for Intel RealSense cameras
-    (D415&nbsp;/&nbsp;D435&nbsp;/&nbsp;D435i): live <b>depth+RGB pose scoring</b> with synchronized
-    <b>chime-then-voice reminders</b> and a <b>local verification dashboard</b>.
-  </p>
-  <div class="cta-row">
-    <a class="btn primary" href="https://github.com/arii/posture-guard">GitHub repo</a>
-    <a class="btn" href="https://github.com/arii/posture-guard/blob/main/src/posture_guard/dashboard/static/docs.html">How it works</a>
+  <div class="hero-grid">
+    <div>
+      <p class="kicker">Intel RealSense · Linux desktop · runs fully local</p>
+      <h1>Posture Guard</h1>
+      <p class="lede">
+        A Linux desktop posture-correction app for Intel RealSense cameras
+        (D415&nbsp;/&nbsp;D435&nbsp;/&nbsp;D435i): live <b>depth+RGB pose scoring</b> with synchronized
+        <b>chime-then-voice reminders</b> and a <b>local verification dashboard</b>.
+      </p>
+      <div class="cta-row">
+        <a class="btn primary" href="https://github.com/arii/posture-guard">GitHub repo</a>
+        <a class="btn" href="https://github.com/arii/posture-guard/blob/main/src/posture_guard/dashboard/static/docs.html">How it works</a>
+      </div>
+    </div>
+    <figure class="hero-shot">
+      <img src="assets/posture-needle-demo.gif" width="480" height="433"
+           alt="Live posture needle demo: the needle rests in the green good zone reading 8, while a banner counts down to the reward chime"
+           loading="lazy">
+      <figcaption>The posture needle: unified 0–100 score with the reward countdown.</figcaption>
+    </figure>
   </div>
 </header>
 
