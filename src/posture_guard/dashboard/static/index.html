@@ -465,6 +465,60 @@ function drawSkeleton() {
     ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
   });
   drawEdgeVignette(w, h);
+  drawTargetVectors(ctx, pts, w, h);
+}
+
+function drawTargetVectors(ctx, pts, w, h) {
+  // Item 8: pulsing correction arrows at breaching vertices. Direction comes
+  // from geometry where the wireframe has it (head tilt sinks the higher ear,
+  // shoulder level raises the lower shoulder, trunk lean mirrors the
+  // shoulders-vs-hips offset); head forward is a depth metric, so it follows
+  // the mini-HUD's 2-axis convention (+ = drifts down → correction points
+  // up-screen). Arrow length scales with severity on the same 1.5x-limit
+  // scale as the bullet bars. Crimson like the confirmed-breach wire.
+  if (!last.metrics || !thresholds || last.state === "unreliable") return;
+  const breach = (key) => last.metrics[key] !== null &&
+    thresholds[key] !== undefined && Math.abs(last.metrics[key]) >= thresholds[key];
+  const breached = ["head_forward_deg", "head_tilt_deg", "shoulder_level_deg", "trunk_lean_deg"]
+    .filter(breach);
+  if (!breached.length) return;
+  const severity = (key) =>
+    Math.min(1, Math.abs(last.metrics[key]) / (thresholds[key] * 1.5));
+  ctx.save();
+  ctx.globalAlpha = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(Date.now() / 220));
+  ctx.strokeStyle = "#ef4444";
+  ctx.fillStyle = "#ef4444";
+  ctx.lineWidth = 4;
+  const arrow = (x, y, ux, uy, len) => {
+    const ex = x + ux * len, ey = y + uy * len;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+    const ang = Math.atan2(uy, ux);
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - 12 * Math.cos(ang - 0.45), ey - 12 * Math.sin(ang - 0.45));
+    ctx.lineTo(ex - 12 * Math.cos(ang + 0.45), ey - 12 * Math.sin(ang + 0.45));
+    ctx.closePath(); ctx.fill();
+  };
+  const mid = (a, b) => [(pts[a][0] + pts[b][0]) / 2, (pts[a][1] + pts[b][1]) / 2];
+  for (const key of breached) {
+    const len = (key === "trunk_lean_deg" ? w : h) * (0.05 + 0.06 * severity(key));
+    if (key === "head_forward_deg") {
+      const [x, y] = mid("lear", "rear");
+      arrow(x, y, 0, -1, len);
+    } else if (key === "head_tilt_deg") {
+      // The higher ear sinks to level the head.
+      const high = pts.lear[1] <= pts.rear[1] ? "lear" : "rear";
+      arrow(pts[high][0], pts[high][1], 0, 1, len);
+    } else if (key === "shoulder_level_deg") {
+      const low = pts.ls[1] >= pts.rs[1] ? "ls" : "rs";
+      arrow(pts[low][0], pts[low][1], 0, -1, len);
+    } else if (key === "trunk_lean_deg") {
+      const shMid = mid("ls", "rs"), hipMid = mid("lh", "rh");
+      const leanDx = shMid[0] - hipMid[0];
+      if (leanDx !== 0) arrow(shMid[0], shMid[1], -Math.sign(leanDx), 0, len);
+    }
+  }
+  ctx.restore();
 }
 
 function setSetting(id, value) {
