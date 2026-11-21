@@ -16,6 +16,12 @@ on:
       - "scripts/make-fake-camera.mjs"
       - ".github/workflows/demo-video.yml"
 
+# Only superseded feature-branch pushes share a cancellation group.
+# Main, manual, scheduled and tag runs stay independent, including pending runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' }}
+
 jobs:
   render:
     runs-on: ubuntu-latest
