@@ -26,7 +26,7 @@ import { SOUND_PACKS, playSpooky } from "./sound-packs.js";
 import { BREAKS, BreakTracker } from "./breaks.js";
 import { BreatheGuide, BreathingMoments, GUIDE_SAFETY } from "./breathing.js";
 import { PromptScheduler } from "./prompts.js";
-import { angleTransform, gaugeView, tileStates, ZONE_COLOR } from "./mini-view.js";
+import { angleTransform, gaugeView, glideAngle, tileStates, ZONE_COLOR } from "./mini-view.js";
 import { SessionTimeline } from "./timeline.js";
 import { demoPose, practicePose } from "./demo-pose.js";
 import {
@@ -1808,13 +1808,23 @@ function renderMetrics(relative, zone, cue) {
 }
 
 /** Needle, label and skeleton colour from one zone (mini-view.js), so they always agree (#97). */
+let shownAngle = null;
+let shownAngleAt = 0;
 function renderNeedle(view, held) {
   const rotor = $("needle-rotor");
   // No zone (settling in, not tracked): no needle, so it can't point into an arc the label
   // and skeleton don't show, and no leftover "slouching" from before.
   const zoned = view.zone !== "none" && view.angle !== null;
   rotor.style.visibility = zoned || held ? "" : "hidden";
-  if (zoned) rotor.setAttribute("transform", angleTransform(view.angle));
+  if (zoned) {
+    // Glide to the target angle: a zone change sweeps across the dial instead of snapping.
+    const now = performance.now();
+    shownAngle = glideAngle(shownAngle, view.angle, (now - shownAngleAt) / 1000);
+    shownAngleAt = now;
+    rotor.setAttribute("transform", angleTransform(shownAngle));
+  } else {
+    shownAngle = null; // hidden: the next appearance starts at its target
+  }
   if (held) setGaugeLabel("posture paused");
   else setGaugeLabel(view.label ?? "settling in"); // one word; the cue itself is the banner on the video
 }

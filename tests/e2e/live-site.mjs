@@ -437,7 +437,7 @@ try {
       good,
     );
     await shot("04-good");
-    const slipping = await until((g) => g.bar === "amber" && g.fill >= 30 && g.fill <= 85, 30000);
+    const slipping = await until((g) => g.bar === "amber" && g.zone === "amber" && g.fill >= 30 && g.fill <= 85, 30000);
     check(
       `gauge (${width} px, frame 05): slipping is amber everywhere, with an amber fill and no "Looking good"`,
       slipping.badgeColor === "amber" &&
@@ -452,7 +452,8 @@ try {
       slipping,
     );
     await shot("05-slipping");
-    const slouched = await until((g) => g.badge === "sit up" && g.bar === "none", 30000);
+    // The needle glides (~1 s), so wait for it to reach the red arc after the badge flips.
+    const slouched = await until((g) => g.badge === "sit up" && g.bar === "none" && g.zone === "red", 30000);
     const fill = await page.evaluate(() => window.__fill);
     check(
       `gauge (${width} px): the amber fill is full when the chime plays`,
@@ -472,7 +473,9 @@ try {
       slouched,
     );
     await shot("06-slouched");
-    const recovered = await until((g) => g.badge === "good posture", 30000);
+    // The needle glides to the new zone (glideAngle, ~1 s) instead of snapping, so wait for it
+    // to arrive: the badge flips first and the needle must follow, then all four agree.
+    const recovered = await until((g) => g.badge === "good posture" && g.zone === "green", 30000);
     await page.waitForTimeout(300);
     const after = await gauge();
     check(

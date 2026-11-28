@@ -71,6 +71,21 @@ export function gaugeView(state, scored, slipping, needle) {
   };
 }
 
+/** Time constant (s) of the needle glide: long enough to read as a sweep, short enough to track a slouch. */
+const NEEDLE_GLIDE_TAU_S = 0.35;
+
+/**
+ * The needle angle to draw: `shown` glides toward `target` (exponential, frame-rate independent),
+ * so a change of zone sweeps across the dial instead of snapping up to 120 degrees in one frame.
+ * Display only: the zone, label and colour still come from the state machine (gaugeView), and
+ * `shown` null (first frame, or the needle was hidden) starts at the target.
+ */
+export function glideAngle(shown, target, dtSeconds, tau = NEEDLE_GLIDE_TAU_S) {
+  if (shown === null || shown === undefined || !Number.isFinite(shown)) return target;
+  if (!Number.isFinite(dtSeconds) || dtSeconds <= 0) return shown;
+  return target + (shown - target) * Math.exp(-dtSeconds / tau);
+}
+
 /** SVG rotate() about the dial centre (100, 100) for an angle in degrees. */
 export function angleTransform(deg) {
   return `rotate(${deg.toFixed(1)} 100 100)`;

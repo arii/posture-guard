@@ -1,6 +1,6 @@
 {
-  "version": "61e94883ffed90c7",
-  "totalBytes": 33478623,
+  "version": "2d1c1648364cb861",
+  "totalBytes": 33481011,
   "files": [
     {
       "url": "activity.js",
@@ -9,8 +9,8 @@
     },
     {
       "url": "app.js",
-      "size": 148987,
-      "sha256": "bf52ae937873e776439fba33b5ead2fbe43765943abbfda00f9acc809d9faaff"
+      "size": 149373,
+      "sha256": "7903f4a875c8a990c9d8f568480e919d575e63a4cabd7bdf75f7a293005bcbd4"
     },
     {
       "url": "breaks.js",
@@ -44,8 +44,8 @@
     },
     {
       "url": "demo-pose.js",
-      "size": 2770,
-      "sha256": "05dd548227f85b52fbd98cff6dd4e5eb2915361e95ca37d6a4be2aa07cd4f0a6"
+      "size": 3947,
+      "sha256": "4a122aa4373000389092673c490346dd5e4e34bf4393524129f866f5c1db564c"
     },
     {
       "url": "feedback.js",
@@ -64,8 +64,8 @@
     },
     {
       "url": "mini-view.js",
-      "size": 3642,
-      "sha256": "8fa20adf38fa65db9aaced1a7601ec7db3a3e8bdf7fbc66cf19dd8f2b357e7ac"
+      "size": 4467,
+      "sha256": "f58372c3dabf297cbe63ff417d5e3082b2cf324ff9099e928f6218437d9b3fcc"
     },
     {
       "url": "movenet-adapter.js",
