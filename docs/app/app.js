@@ -2483,7 +2483,8 @@ function step() {
 }
 
 function visibleLoop() {
-  if (!document.hidden && performance.now() - lastProcessed >= 1000 / VISIBLE_FPS - 2) {
+  // The demo has no detection to pace (its poses are scripted), so it renders at display rate; a real camera stays at VISIBLE_FPS.
+  if (!document.hidden && (demo || performance.now() - lastProcessed >= 1000 / VISIBLE_FPS - 2)) {
     lastProcessed = performance.now();
     step();
   }
